@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+.env
+
+# Playwright / Chromium
+.ms-playwright/
+playwright-report/
+
+# Debug / output images
+debug_*.png
+final_*.png
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
