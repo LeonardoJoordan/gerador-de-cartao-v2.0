@@ -80,11 +80,27 @@ def load_template_for_model(model_name: str, project_root: Path | None = None) -
 
     background = data.get("background", "background.png")
 
+    # Normaliza boxes com defaults
+    norm_boxes = []
+    for b in list(data["boxes"]):
+        bb = dict(b)
+
+        bb.setdefault("align", "left")
+        bb.setdefault("font", "DejaVu Sans")
+        bb.setdefault("size", 32)
+        bb.setdefault("color", "#FFFFFF")
+
+        bb.setdefault("line_height", 1.15)
+        bb.setdefault("indent_px", 0)
+        bb.setdefault("editable", False)
+
+        norm_boxes.append(bb)
+
     tpl = TemplateV2(
         name=str(data["name"]),
         dpi=int(data["dpi"]),
         size_px={"w": int(data["size_px"]["w"]), "h": int(data["size_px"]["h"])},
         background=str(background),
-        boxes=list(data["boxes"]),
+        boxes=norm_boxes,
     )
     return tpl, model_dir

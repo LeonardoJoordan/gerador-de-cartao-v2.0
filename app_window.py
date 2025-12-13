@@ -206,19 +206,9 @@ class MainWindow(QMainWindow):
 
                 html_text = model_v2.resolve_box_text(mb, row_plain_0, row_rich_0)
 
-                # defaults inteligentes:
-                # - se for "mensagem" e ainda estiver left, assumimos justify + recuo padrão
                 align = mb.align
                 indent_px = mb.indent_px
                 line_height = mb.line_height
-
-                if mb.id.lower() == "mensagem":
-                    if align == "left":
-                        align = "justify"
-                    if indent_px == 0:
-                        indent_px = 40
-                    if abs(line_height - 1.15) < 1e-6:
-                        line_height = 1.35
 
                 render_boxes.append({
                     "id": mb.id,
@@ -230,8 +220,8 @@ class MainWindow(QMainWindow):
                     "font": tb.get("font", "DejaVu Sans"),
                     "size": tb.get("size", 32),
                     "color": tb.get("color", "#FFFFFF"),
-                    "line_height": line_height,
-                    "indent_px": indent_px,
+                    "line_height": tb.get("line_height", line_height),
+                    "indent_px": tb.get("indent_px", indent_px),
                     "html_text": html_text,
                 })
 

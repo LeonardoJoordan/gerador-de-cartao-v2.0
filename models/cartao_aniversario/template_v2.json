@@ -4,9 +4,49 @@
   "size_px": { "w": 1535, "h": 1063 },
   "background": "background.png",
   "boxes": [
-    { "id": "nome",       "x": 100, "y": 120, "w": 1335, "h": 120, "align": "center",  "font": "DejaVu Sans",  "size": 46, "color": "#FFFFFF" },
-    { "id": "mensagem",   "x": 140, "y": 260, "w": 1255, "h": 520, "align": "justify", "font": "DejaVu Serif", "size": 30, "color": "#FFFFFF" },
-    { "id": "data",       "x": 100, "y": 820, "w": 1335, "h": 80,  "align": "center",  "font": "DejaVu Sans",  "size": 28, "color": "#FFFFFF" },
-    { "id": "comandante", "x": 100, "y": 920, "w": 1335, "h": 80,  "align": "center",  "font": "DejaVu Sans",  "size": 28, "color": "#FFFFFF" }
+    {
+      "id": "nome",
+      "x": 100, "y": 120, "w": 1335, "h": 120,
+      "align": "center",
+      "font": "DejaVu Sans",
+      "size": 46,
+      "color": "#FFFFFF",
+      "line_height": 1.15,
+      "indent_px": 0,
+      "editable": false
+    },
+    {
+      "id": "mensagem",
+      "x": 140, "y": 260, "w": 1255, "h": 520,
+      "align": "justify",
+      "font": "DejaVu Serif",
+      "size": 30,
+      "color": "#FFFFFF",
+      "line_height": 1.35,
+      "indent_px": 40,
+      "editable": false
+    },
+    {
+      "id": "data",
+      "x": 100, "y": 820, "w": 1335, "h": 80,
+      "align": "center",
+      "font": "DejaVu Sans",
+      "size": 28,
+      "color": "#FFFFFF",
+      "line_height": 1.15,
+      "indent_px": 0,
+      "editable": false
+    },
+    {
+      "id": "comandante",
+      "x": 100, "y": 920, "w": 1335, "h": 80,
+      "align": "center",
+      "font": "DejaVu Sans",
+      "size": 28,
+      "color": "#FFFFFF",
+      "line_height": 1.15,
+      "indent_px": 0,
+      "editable": false
+    }
   ]
 }
