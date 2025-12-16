@@ -1,266 +1,312 @@
-from dataclasses import dataclass
+# load_model/dialog_model_config.py
+from __future__ import annotations
+
+import json
+from pathlib import Path
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView, QFrame, QWidget, QLineEdit, QMessageBox
+    QHeaderView, QAbstractItemView, QFrame, QWidget, QMessageBox, QComboBox, 
+    QTabWidget, QSplitter
 )
 from PySide6.QtCore import Qt
 
-
-@dataclass
-class DetectedLayer:
-    element_id: str
-    text_preview: str
-    tag: str
-    font_family: str
-    font_size: str
+# Importamos o Core (Zona 1)
+from core.svg_scanner import scan_svg
+from core.model_v2 import build_model_from_scan, ModelV2, ModelBox
 
 
 class ModelConfigDialog(QDialog):
     """
-    Etapa 1 (UI pura): mostra um diálogo único com uma tabela de "camadas detectadas" FAKE,
-    só pra validar o layout e o fluxo de marcação de campos variáveis.
-
-    Etapa 2: vamos substituir o fake por análise real do SVG.
+    Diálogo para analisar o SVG, visualizar as boxes/imagens detectadas
+    e salvar o template_v2.json oficial.
+    Agora integrado com o Scanner Real e ModelV2.
     """
-    def __init__(self, parent=None, initial_model_name=None):
+    def __init__(self, parent=None, model_name=None, model_dir=None, svg_path=None):
         super().__init__(parent)
-        self.selected_model_name = initial_model_name
-        self.output_pattern = ""  # vamos preencher ao salvar
-        self.setWindowTitle("Configurar Modelo")
-        self.resize(1100, 650)
+        
+        # Tenta pegar contexto do parent se não passado explicitamente
+        if parent and hasattr(parent, 'active_model_name'):
+            self.model_name = parent.active_model_name
+            # Assume estrutura padrão: models/{slug}/
+            # (Na V3 o manager deve passar paths explícitos, por enquanto inferimos)
+            from core.template_v2 import slugify_model_name
+            slug = slugify_model_name(self.model_name)
+            self.model_dir = Path(f"models/{slug}")
+            self.svg_path = self.model_dir / "modelo.svg"
+        else:
+            self.model_name = model_name or "Desconhecido"
+            self.model_dir = Path(model_dir) if model_dir else None
+            self.svg_path = Path(svg_path) if svg_path else None
 
-        self._loaded_svg_path = None
-        self._detected: list[DetectedLayer] = []
+        self.output_pattern = "cartao_{nome}" 
+        self.setWindowTitle(f"Configurar Modelo: {self.model_name}")
+        self.resize(1100, 700)
 
-        self.selected_model_name = initial_model_name
+        # Layout Principal
+        main_layout = QVBoxLayout(self)
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(12)
+        # --- Topo: Info e Ações
+        top_bar = QHBoxLayout()
+        
+        lbl_info = QLabel(f"<b>Modelo:</b> {self.model_name}<br><b>Pasta:</b> {self.model_dir}")
+        top_bar.addWidget(lbl_info)
+        top_bar.addStretch()
 
-        # ---------- ESQUERDA (preview + infos + botões)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
-
-        title = QLabel("Modelo")
-        title.setStyleSheet("font-size: 16px; font-weight: 600;")
-        left_layout.addWidget(title)
-
-        self.preview = QLabel("Pré-visualização\n(Etapa 1: placeholder)")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumSize(360, 260)
-        self.preview.setFrameShape(QFrame.Shape.StyledPanel)
-        self.preview.setStyleSheet("background-color: #2a2a2a; border-radius: 10px;")
-        left_layout.addWidget(self.preview)
-
-        self.lbl_doc_info = QLabel("Documento: (não carregado)\nTamanho: -\nviewBox: -")
-        self.lbl_doc_info.setStyleSheet("color: #cfcfcf;")
-        left_layout.addWidget(self.lbl_doc_info)
-
-
-        # Botões
-        btn_row = QHBoxLayout()
-        self.btn_load_svg = QPushButton("Carregar SVG…")
-        self.btn_analyze = QPushButton("Analisar")
-        btn_row.addWidget(self.btn_load_svg)
-        btn_row.addWidget(self.btn_analyze)
-        left_layout.addLayout(btn_row)
-
-        # Nome do template
-        self.ed_template_name = QLineEdit()
-        self.ed_template_name.setPlaceholderText("Nome do template (ex: cartao_parabenizacao)")
-        left_layout.addWidget(self.ed_template_name)
-        lbl_out = QLabel("Nome do arquivo (padrão)")
-        lbl_out.setStyleSheet("font-weight: 600;")
-        left_layout.addWidget(lbl_out)
-
-        self.ed_output_pattern = QLineEdit()
-        self.ed_output_pattern.setPlaceholderText("Ex: cartao_{nome}  |  Use {coluna} para variáveis")
-        left_layout.addWidget(self.ed_output_pattern)
-
-        left_layout.addStretch(1)
-
-
-
-        lbl_out = QLabel("Nome do arquivo (padrão)")
-        lbl_out.setStyleSheet("font-weight: 600;")
-        left_layout.addWidget(lbl_out)
-
-        self.ed_output_pattern = QLineEdit()
-        self.ed_output_pattern.setPlaceholderText("Ex: cartao_{nome}  |  Use {coluna} para variáveis")
-        left_layout.addWidget(self.ed_output_pattern)
-
-        self.lbl_out_help = QLabel("Variáveis serão substituídas a partir das colunas da tabela.")
-        self.lbl_out_help.setStyleSheet("color: #cfcfcf;")
-        left_layout.addWidget(self.lbl_out_help)
-
-        # Botões finais
-        bottom_row = QHBoxLayout()
-        self.btn_save = QPushButton("Salvar Template")
-        self.btn_cancel = QPushButton("Cancelar")
-        bottom_row.addWidget(self.btn_save)
-        bottom_row.addWidget(self.btn_cancel)
-        left_layout.addLayout(bottom_row)
-
-        # ---------- DIREITA (tabela)
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
-
-        right_title = QLabel("Camadas de texto detectadas")
-        right_title.setStyleSheet("font-size: 16px; font-weight: 600;")
-        right_layout.addWidget(right_title)
-
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels([
-            "Variável",
-            "Nome da coluna",
-            "ID",
-            "Texto atual",
-            "Tag",
-            "Fonte/Tam."
-        ])
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked |
-            QAbstractItemView.EditTrigger.EditKeyPressed
-        )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setStretchLastSection(True)
-
-        self.table.setColumnWidth(0, 80)
-        self.table.setColumnWidth(1, 170)
-        self.table.setColumnWidth(2, 160)
-        self.table.setColumnWidth(3, 320)
-        self.table.setColumnWidth(4, 120)
-        self.table.setColumnWidth(5, 160)
-
-        right_layout.addWidget(self.table, 1)
-
-        root.addWidget(left, 4)
-        root.addWidget(right, 6)
-
-        # ---------- Conexões
-        self.btn_cancel.clicked.connect(self.reject)
-        self.btn_save.clicked.connect(self._on_save)
-        self.btn_load_svg.clicked.connect(self._on_load_svg)
+        self.btn_analyze = QPushButton("1. Analisar SVG (Scanner)")
+        self.btn_analyze.setMinimumHeight(40)
+        self.btn_analyze.setStyleSheet("background-color: #2c3e50; font-weight: bold;")
         self.btn_analyze.clicked.connect(self._on_analyze)
+        top_bar.addWidget(self.btn_analyze)
 
-        self.ed_template_name.setText(self.selected_model_name or "")
-        if not self.ed_output_pattern.text().strip():
-            self.ed_output_pattern.setText("cartao_{nome}")
+        main_layout.addLayout(top_bar)
 
+        # --- Corpo: Abas (Boxes e Imagens)
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
 
-        # Carrega dados fake
-        self._load_fake_detected()
-    
+        # ABA 1: Boxes (Texto e Layout)
+        self.tab_boxes = QWidget()
+        self._init_tab_boxes()
+        self.tabs.addTab(self.tab_boxes, "Camadas de Texto (Boxes)")
 
-    def _load_fake_detected(self):
-        self._detected = [
-            DetectedLayer("nome", "NOME DO MILITAR", "text", "DejaVu Sans", "42px"),
-            DetectedLayer("mensagem", "Mensagem de parabenização com várias linhas...", "text", "DejaVu Serif", "26px"),
-            DetectedLayer("data", "12 DE DEZEMBRO DE 2025", "text", "DejaVu Sans", "22px"),
-            DetectedLayer("comandante", "Cel Fulano de Tal", "text", "DejaVu Sans", "22px"),
-            DetectedLayer("fixo_feliz_natal", "FELIZ NATAL", "text", "DejaVu Sans", "30px"),
-        ]
-        self._fill_table(self._detected)
+        # ABA 2: Imagens (Assets)
+        self.tab_images = QWidget()
+        self._init_tab_images()
+        self.tabs.addTab(self.tab_images, "Ativos de Imagem")
 
-    def _fill_table(self, items: list[DetectedLayer]):
-        self.table.setRowCount(0)
+        # --- Rodapé: Salvar
+        bottom_bar = QHBoxLayout()
+        self.btn_save = QPushButton("2. Salvar Configuração (JSON)")
+        self.btn_save.setMinimumHeight(45)
+        self.btn_save.setStyleSheet("background-color: #27ae60; font-weight: bold;")
+        self.btn_save.clicked.connect(self._on_save)
+        
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.clicked.connect(self.reject)
 
-        for layer in items:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
+        bottom_bar.addStretch()
+        bottom_bar.addWidget(self.btn_cancel)
+        bottom_bar.addWidget(self.btn_save)
 
-            # Checkbox
-            chk = QTableWidgetItem()
-            chk.setFlags(chk.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            chk.setCheckState(Qt.CheckState.Unchecked)
-            self.table.setItem(row, 0, chk)
+        main_layout.addLayout(bottom_bar)
+        
+        # Estado interno
+        self.current_model_v2: ModelV2 | None = None
 
-            # Nome da coluna (editável)
-            col_name = QTableWidgetItem("")
-            col_name.setFlags(col_name.flags() | Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 1, col_name)
+    def _init_tab_boxes(self):
+        layout = QVBoxLayout(self.tab_boxes)
+        
+        # Tabela
+        self.table_boxes = QTableWidget()
+        cols = ["Ativo", "Origem", "ID (SVG)", "Preview Texto", "Align", "Font", "Size", "Color", "Indent", "LineH"]
+        self.table_boxes.setColumnCount(len(cols))
+        self.table_boxes.setHorizontalHeaderLabels(cols)
+        self.table_boxes.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # Coluna preview estica
+        self.table_boxes.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        
+        layout.addWidget(self.table_boxes)
 
-            # ID (readonly)
-            id_item = QTableWidgetItem(layer.element_id)
-            id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 2, id_item)
-
-            # Texto atual (readonly)
-            txt_item = QTableWidgetItem(layer.text_preview)
-            txt_item.setFlags(txt_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 3, txt_item)
-
-            # Tag (readonly)
-            tag_item = QTableWidgetItem(layer.tag)
-            tag_item.setFlags(tag_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 4, tag_item)
-
-            # Fonte/Tam (readonly)
-            fs_item = QTableWidgetItem(f"{layer.font_family} / {layer.font_size}")
-            fs_item.setFlags(fs_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 5, fs_item)
-
-        self.table.resizeRowsToContents()
-
-    def _on_load_svg(self):
-        # Etapa 1: simulação (na Etapa 2 usaremos QFileDialog e path real)
-        self._loaded_svg_path = "modelo.svg"
-        self.lbl_doc_info.setText(
-            "Documento: modelo.svg\n"
-            "Tamanho: 130x90mm (exemplo)\n"
-            "viewBox: 0 0 1535 1063 (exemplo)"
-        )
-        self.preview.setText("Pré-visualização\n(modelo carregado - fake)")
+    def _init_tab_images(self):
+        layout = QVBoxLayout(self.tab_images)
+        
+        self.table_images = QTableWidget()
+        cols = ["ID (SVG)", "Tipo", "Caminho Relativo (src)", "Geometria (x, y, w, h)", "Z-Index"]
+        self.table_images.setColumnCount(len(cols))
+        self.table_images.setHorizontalHeaderLabels(cols)
+        self.table_images.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        
+        layout.addWidget(self.table_images)
 
     def _on_analyze(self):
-        # Etapa 1: só recarrega a tabela fake
-        self._load_fake_detected()
+        """Executa o scanner e popula a UI."""
+        if not self.svg_path or not self.svg_path.exists():
+            QMessageBox.critical(self, "Erro", f"Arquivo SVG não encontrado:\n{self.svg_path}")
+            return
+
+        try:
+            # 1. Scanner (Zona 1) - Extrai raw data e salva assets
+            scan_result = scan_svg(self.svg_path, output_model_dir=self.model_dir)
+            
+            # 2. Model Builder (Zona 1) - Consolida lógica
+            self.current_model_v2 = build_model_from_scan(scan_result)
+            
+            # 3. Preenche UI
+            self._fill_boxes_table(self.current_model_v2)
+            self._fill_images_table(self.current_model_v2)
+            
+            QMessageBox.information(self, "Sucesso", 
+                f"Análise concluída!\n"
+                f"- Boxes detectadas: {len(self.current_model_v2.boxes_by_id)}\n"
+                f"- Imagens extraídas: {len(self.current_model_v2.images)}"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro Fatal", f"Falha ao analisar SVG:\n{e}")
+
+    def _fill_boxes_table(self, model: ModelV2):
+        self.table_boxes.setRowCount(0)
+        
+        # Ordena boxes (idealmente por z-index, aqui por ordem de processamento)
+        boxes = model.boxes_in_order()
+        
+        self.table_boxes.setRowCount(len(boxes))
+        
+        for row, box in enumerate(boxes):
+            # Col 0: Checkbox (Editable/Ativo)
+            item_check = QTableWidgetItem()
+            item_check.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            # Por padrão, se tiver texto, marcamos como ativo
+            state = Qt.CheckState.Checked if box.template_text else Qt.CheckState.Unchecked
+            item_check.setCheckState(state)
+            self.table_boxes.setItem(row, 0, item_check)
+
+            # Col 1: Origem (Tag)
+            # Infere origem baseada nos dados
+            origin = "UNKNOWN"
+            if box.w > 0 and box.template_text:
+                origin = "MERGED" # Rect + Text
+            elif box.w > 0:
+                origin = "LAYOUT" # Só Rect
+            elif box.template_text:
+                origin = "TEXT"   # Só Text
+            
+            item_origin = QTableWidgetItem(origin)
+            item_origin.setFlags(Qt.ItemFlag.ItemIsEnabled) # Read-only
+            self.table_boxes.setItem(row, 1, item_origin)
+
+            # Col 2: ID
+            item_id = QTableWidgetItem(box.id)
+            item_id.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.table_boxes.setItem(row, 2, item_id)
+
+            # Col 3: Preview Texto
+            self.table_boxes.setItem(row, 3, QTableWidgetItem(box.template_text))
+
+            # Col 4: Align (Combo)
+            cmb_align = QComboBox()
+            cmb_align.addItems(["left", "center", "right", "justify"])
+            cmb_align.setCurrentText(box.align)
+            self.table_boxes.setCellWidget(row, 4, cmb_align)
+
+            # Col 5: Font (Combo simples ou LineEdit)
+            # Para MVP: LineEdit
+            self.table_boxes.setItem(row, 5, QTableWidgetItem(box.font))
+
+            # Col 6: Size
+            self.table_boxes.setItem(row, 6, QTableWidgetItem(str(int(box.size))))
+
+            # Col 7: Color
+            self.table_boxes.setItem(row, 7, QTableWidgetItem(box.color))
+            
+            # Col 8: Indent
+            self.table_boxes.setItem(row, 8, QTableWidgetItem(str(box.indent_px)))
+
+            # Col 9: LineHeight
+            self.table_boxes.setItem(row, 9, QTableWidgetItem(str(box.line_height)))
+            
+            # Guardamos o objeto box na linha para referência futura se precisar
+            item_origin.setData(Qt.ItemDataRole.UserRole, box)
+
+    def _fill_images_table(self, model: ModelV2):
+        self.table_images.setRowCount(0)
+        self.table_images.setRowCount(len(model.images))
+        
+        for row, img in enumerate(model.images):
+            # ID
+            self.table_images.setItem(row, 0, QTableWidgetItem(img.element_id))
+            
+            # Tipo (Detecção simples por ID)
+            role = "Asset"
+            if "fundo" in img.element_id.lower() or "background" in img.element_id.lower():
+                role = "BACKGROUND"
+            elif "assinatura" in img.element_id.lower():
+                role = "OVERLAY"
+            self.table_images.setItem(row, 1, QTableWidgetItem(role))
+            
+            # Path
+            self.table_images.setItem(row, 2, QTableWidgetItem(img.src_relative_path))
+            
+            # Geometria
+            geo = f"{img.x:.0f}, {img.y:.0f} | {img.w:.0f}x{img.h:.0f}"
+            self.table_images.setItem(row, 3, QTableWidgetItem(geo))
+            
+            # Z
+            self.table_images.setItem(row, 4, QTableWidgetItem(str(img.z_index)))
 
     def _on_save(self):
-        name = self.ed_template_name.text().strip()
-        if not name:
-            QMessageBox.warning(self, "Atenção", "Defina um nome para o template.")
+        if not self.current_model_v2:
+            QMessageBox.warning(self, "Aviso", "Analise o SVG primeiro.")
             return
+
+        # Reconstrói lista de boxes baseada na tabela (usuário pode ter editado valores)
+        final_boxes = []
         
-        pattern = self.ed_output_pattern.text().strip()
-        if not pattern:
-            QMessageBox.warning(self, "Atenção", "Defina um padrão de nome de arquivo.")
-            return
+        for r in range(self.table_boxes.rowCount()):
+            # Se não estiver checado, ignora (ou salva como hidden? Por enquanto ignora)
+            checked = self.table_boxes.item(r, 0).checkState() == Qt.CheckState.Checked
+            if not checked:
+                continue
+            
+            # Recupera dados das células
+            b_id = self.table_boxes.item(r, 2).text()
+            b_preview = self.table_boxes.item(r, 3).text()
+            
+            widget_align = self.table_boxes.cellWidget(r, 4)
+            b_align = widget_align.currentText() if widget_align else "left"
+            
+            b_font = self.table_boxes.item(r, 5).text()
+            b_size = float(self.table_boxes.item(r, 6).text() or 32)
+            b_color = self.table_boxes.item(r, 7).text()
+            b_indent = int(self.table_boxes.item(r, 8).text() or 0)
+            b_lh = float(self.table_boxes.item(r, 9).text() or 1.15)
+
+            # Recupera geometria original da box (está guardada no UserRole da col 1)
+            original_box: ModelBox = self.table_boxes.item(r, 1).data(Qt.ItemDataRole.UserRole)
+            
+            box_dict = {
+                "id": b_id,
+                "x": int(original_box.x),
+                "y": int(original_box.y),
+                "w": int(original_box.w),
+                "h": int(original_box.h),
+                "align": b_align,
+                "font": b_font,
+                "size": int(b_size),
+                "color": b_color,
+                "line_height": b_lh,
+                "indent_px": b_indent,
+                "editable": False, # Futuro: checkbox na tabela
+                "default_text": b_preview # Salva o texto do SVG como default
+            }
+            final_boxes.append(box_dict)
+
+        # Detecta background (pega o primeiro asset marcado como BACKGROUND ou o primeiro asset geral)
+        bg_file = "background.png" # Default
+        for img in self.current_model_v2.images:
+            if "fundo" in img.element_id.lower() or "background" in img.element_id.lower():
+                bg_file = img.src_relative_path
+                break
+            # Fallback: se houver imagem grande
+            if img.w > 500 and img.h > 500:
+                bg_file = img.src_relative_path
+
+        template_data = {
+            "name": self.model_name,
+            "dpi": 300, # TODO: Ler do SVG se possível
+            "size_px": {"w": 1000, "h": 1000}, # TODO: Ler do SVG root width/height
+            "background": bg_file,
+            "boxes": final_boxes
+        }
+
+        # Tenta pegar tamanho real se tiver um rect de fundo ou do viewbox (implementação futura)
+        # Por enquanto mantemos 1000x1000 ou o que vier do background se lermos o arquivo
         
-        self.output_pattern = pattern
-
-        if "{" not in pattern or "}" not in pattern:
-            # não é obrigatório ter variável, mas normalmente faz sentido avisar
-            # se quiser, podemos deixar sem aviso.
-            pass
-
-        selected = self._get_selected_fields()
-        if selected is None:
-            QMessageBox.warning(self, "Atenção", "Para cada campo marcado como variável, preencha o Nome da coluna.")
-            return
-        if len(selected) == 0:
-            QMessageBox.warning(self, "Atenção", "Marque pelo menos um campo como variável.")
-            return
-
-
-
-        self.accept()
-
-    def _get_selected_fields(self):
-        fields = []
-        for row in range(self.table.rowCount()):
-            is_var = self.table.item(row, 0).checkState() == Qt.CheckState.Checked
-            col_name = (self.table.item(row, 1).text() or "").strip()
-            element_id = self.table.item(row, 2).text()
-
-            if is_var:
-                if not col_name:
-                    return None  # inválido
-                fields.append((col_name, element_id))
-        return fields
+        try:
+            out_path = self.model_dir / "template_v2.json"
+            out_path.write_text(json.dumps(template_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            
+            QMessageBox.information(self, "Salvo", f"Template salvo com sucesso em:\n{out_path}")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Erro ao Salvar", str(e))

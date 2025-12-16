@@ -1,9 +1,15 @@
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QFrame, QMessageBox, QAbstractItemView
+    QListWidget, QListWidgetItem, QFrame, QMessageBox, QAbstractItemView, QFileDialog,
+    QInputDialog
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPixmap, QIcon, QPainter, QFont
+from pathlib import Path
+import shutil
+
+from load_model.dialog_model_config import ModelConfigDialog
+
 
 
 def _make_placeholder_icon(text: str, w: int = 220, h: int = 140) -> QIcon:
@@ -107,7 +113,7 @@ class ModelManagerDialog(QDialog):
         self.btn_use.clicked.connect(self._use_selected)
         self.list_models.itemDoubleClicked.connect(lambda _: self._use_selected())
 
-        self.btn_add.clicked.connect(self._add_model_fake)
+        self.btn_add.clicked.connect(self._add_model_real)
         self.btn_duplicate.clicked.connect(self._duplicate_model_fake)
         self.btn_delete.clicked.connect(self._delete_model_fake)
 
@@ -150,13 +156,56 @@ class ModelManagerDialog(QDialog):
         self.selected_model_name = item.text()
         self.accept()
 
-    # ---------- ações fake (Etapa 1 do gerenciador)
-    def _add_model_fake(self):
-        # Por enquanto, só cria um modelo genérico.
-        # Depois: abrir QFileDialog -> importar SVG -> abrir Configurar Modelo -> salvar template.
-        new_name = f"Novo Modelo {self.list_models.count() + 1}"
-        self._add_list_item(new_name)
-        self.list_models.setCurrentRow(self.list_models.count() - 1)
+    def _add_model_real(self):
+        # 1) Escolher SVG
+        svg_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar arquivo SVG do modelo",
+            "",
+            "SVG (*.svg)"
+        )
+        if not svg_path:
+            return
+
+        svg_path = Path(svg_path)
+
+        # 2) Nome do modelo (default = nome do arquivo)
+        default_name = svg_path.stem
+        name, ok = QInputDialog.getText(
+            self,
+            "Nome do modelo",
+            "Informe o nome do modelo:",
+            text=default_name
+        )
+        if not ok or not name.strip():
+            return
+
+        model_name = name.strip()
+
+        # 3) Criar pasta models/<slug>
+        from core.template_v2 import slugify_model_name
+        slug = slugify_model_name(model_name)
+
+        models_root = Path.cwd() / "models"
+        model_dir = models_root / slug
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        # 4) Copiar SVG para dentro da pasta do modelo
+        dst_svg = model_dir / "modelo.svg"
+        shutil.copy(svg_path, dst_svg)
+
+        # 5) Abrir o configurador já com o SVG carregado
+        dlg = ModelConfigDialog(
+            parent=self,
+            model_name=model_name,
+            model_dir=model_dir,
+            svg_path=dst_svg,
+        )
+        dlg.exec()
+
+        # 6) Atualizar lista
+        self._reload_models()
+
 
     def _duplicate_model_fake(self):
         item = self._get_selected_item()
@@ -198,7 +247,6 @@ class ModelManagerDialog(QDialog):
         self.accept()
 
         # Abre o diálogo de configuração do modelo
-        from load_model.dialog_model_config import ModelConfigDialog
         config_dialog = ModelConfigDialog(self, initial_model_name=selected_model)
         if config_dialog.exec():
             self.selected_model_name = config_dialog.selected_model_name

@@ -142,43 +142,48 @@ class MainWindow(QMainWindow):
                 f"pasta={model_dir}"
             )
 
-            # --- Scanner SVG (teste controlado)
+            # --- Scanner SVG (ATUALIZADO PARA NOVO FLUXO)
             try:
                 svg_path = model_dir / "modelo.svg"
-                scan = scan_svg(svg_path)
+                scan = scan_svg(svg_path, output_model_dir=model_dir) # Passamos dir para salvar imagens
 
-                self.log_panel.append(f"Scanner: {len(scan.boxes)} boxes detectadas")
-                for box in scan.boxes:
-                    self.log_panel.append(
-                        f"BOX id='{box.element_id}' | texto='{box.template_text}'"
-                    )
-
-                if scan.placeholders:
-                    self.log_panel.append(
-                        f"Placeholders encontrados: {sorted(scan.placeholders)}"
-                    )
-                else:
-                    self.log_panel.append("Nenhum placeholder encontrado no SVG")
+                # Logs ajustados para a nova estrutura do ScanResult
+                self.log_panel.append(f"Scanner Raw:")
+                self.log_panel.append(f"  - Textos detectados: {len(scan.texts)}")
+                self.log_panel.append(f"  - Áreas (Rects): {len(scan.rects)}")
+                self.log_panel.append(f"  - Imagens (Assets): {len(scan.images)}")
+                
+                for img in scan.images:
+                    self.log_panel.append(f"    [IMG] id='{img.element_id}' path='{img.src_relative_path}'")
 
             except Exception as e:
                 self.log_panel.append(f"ERRO scanner SVG: {e}")
+                # Se falhar scanner, não tem como continuar muito bem
+                return
 
-            # --- Modelo interno (V2): construir estrutura a partir do scan
+            # --- Modelo interno (V2): construir estrutura consolidada
             model_v2 = build_model_from_scan(scan)
 
-            self.log_panel.append(f"ModelV2: {len(model_v2.boxes_by_id)} boxes no total")
+            self.log_panel.append(f"ModelV2 Consolidado: {len(model_v2.boxes_by_id)} boxes ativas")
+            
+            # Log das boxes consolidadas (Rect + Text mergeados)
             for b in model_v2.boxes_in_order():
                 self.log_panel.append(
-                    f"BOX[{b.id}] editable={b.editable} align={b.align} indent_px={b.indent_px} line_height={b.line_height}"
+                    f"BOX[{b.id}] "
+                    f"geo=({b.x},{b.y},{b.w},{b.h}) "
+                    f"font='{b.font}' size={b.size} "
+                    f"align={b.align}"
                 )
-                self.log_panel.append(f"  template_text: {b.template_text}")
-                if b.placeholders():
-                    self.log_panel.append(f"  placeholders: {sorted(b.placeholders())}")
-                else:
-                    self.log_panel.append("  placeholders: (nenhum)")
+                if b.template_text:
+                    self.log_panel.append(f"  texto: '{b.template_text}'")
 
-            self.log_panel.append(f"Colunas placeholders: {model_v2.placeholder_columns()}")
-            self.log_panel.append(f"Colunas editáveis por ID (por enquanto vazias): {model_v2.editable_columns()}")
+            # Placeholders agora vêm do model_v2
+            if model_v2.all_placeholders:
+                self.log_panel.append(f"Placeholders totais: {sorted(model_v2.all_placeholders)}")
+            else:
+                self.log_panel.append("Placeholders: (nenhum)")
+
+            self.log_panel.append(f"Colunas para preencher: {model_v2.placeholder_columns()}")
 
             # --- Prova de resolução (V2): template_text + placeholders + rich
             row_plain_0 = self._last_rows_plain[0]
@@ -187,12 +192,18 @@ class MainWindow(QMainWindow):
             self.log_panel.append("=== RESOLVE (linha 0) ===")
             for b in model_v2.boxes_in_order():
                 resolved = model_v2.resolve_box_text(b, row_plain_0, row_rich_0)
-                self.log_panel.append(f"[{b.id}] -> {resolved}")
+                # Só loga se tiver conteudo resolvido pra nao poluir
+                if resolved:
+                    self.log_panel.append(f"[{b.id}] -> {resolved[:50]}...")
 
             # --- Render overlay FULL (todas as boxes presentes no template_v2)
             render_boxes = []
 
-            # index rápido: boxes do template por id
+            # index rápido: boxes do template JSON por id (para pegar configs salvas se houver)
+            # Nota: O template_v2.json pode estar desatualizado em relação ao SVG recém escaneado.
+            # Idealmente, deveríamos usar o model_v2 como fonte primária de geometria agora?
+            # Por enquanto, mantemos a lógica: JSON é soberano SE existir. Se não, usamos model_v2.
+            
             tpl_by_id = {}
             for tb in tpl.boxes:
                 tb_id = str(tb.get("id", "")).strip()
@@ -200,28 +211,47 @@ class MainWindow(QMainWindow):
                     tpl_by_id[tb_id] = tb
 
             for mb in model_v2.boxes_in_order():
-                tb = tpl_by_id.get(mb.id)
-                if not tb:
-                    continue  # existe no SVG mas não existe no template_v2 (ok por enquanto)
-
+                # Tenta pegar config do JSON, senão usa do scan (model_v2)
+                tb = tpl_by_id.get(mb.id, {})
+                
+                # Geometria: JSON > Model (Scan)
+                # Se JSON tiver w=0, talvez devêssemos usar do scan? 
+                # Vamos assumir que se está no JSON, está certo.
+                
+                # Resolve texto
                 html_text = model_v2.resolve_box_text(mb, row_plain_0, row_rich_0)
 
-                align = mb.align
-                indent_px = mb.indent_px
-                line_height = mb.line_height
+                # Prioridade de valores: Template JSON > Model (Scan)
+                final_x = tb.get("x", mb.x)
+                final_y = tb.get("y", mb.y)
+                final_w = tb.get("w", mb.w)
+                final_h = tb.get("h", mb.h)
+                
+                final_align = tb.get("align", mb.align)
+                final_font = tb.get("font", mb.font)
+                final_size = tb.get("size", mb.size)
+                final_color = tb.get("color", mb.color)
+                
+                final_lh = tb.get("line_height", mb.line_height)
+                final_indent = tb.get("indent_px", mb.indent_px)
+
+                # Se width for 0 (veio de <text> solto e não tem no JSON), o engine vai ter que lidar.
+                # O TypographyEngine atual usa w para o canvas. Se w=0, pode dar problema.
+                if final_w <= 0: final_w = tpl.width  # Fallback seguro
+                if final_h <= 0: final_h = tpl.height # Fallback seguro
 
                 render_boxes.append({
                     "id": mb.id,
-                    "x": tb.get("x", 0),
-                    "y": tb.get("y", 0),
-                    "w": tb.get("w", tpl.width),
-                    "h": tb.get("h", tpl.height),
-                    "align": tb.get("align", align),  # se template tiver align, ele manda por enquanto
-                    "font": tb.get("font", "DejaVu Sans"),
-                    "size": tb.get("size", 32),
-                    "color": tb.get("color", "#FFFFFF"),
-                    "line_height": tb.get("line_height", line_height),
-                    "indent_px": tb.get("indent_px", indent_px),
+                    "x": final_x,
+                    "y": final_y,
+                    "w": final_w,
+                    "h": final_h,
+                    "align": final_align,
+                    "font": final_font,
+                    "size": final_size,
+                    "color": final_color,
+                    "line_height": final_lh,
+                    "indent_px": final_indent,
                     "html_text": html_text,
                 })
 
@@ -238,6 +268,10 @@ class MainWindow(QMainWindow):
             bg_path = model_dir / tpl.background  # vem do template_v2.json
             out_final = model_dir / "debug_final.png"
 
+            # TODO: Aqui deveríamos usar as imagens extraídas pelo Scanner (model_v2.images)
+            # Se o template JSON diz "background.png", mas o scanner achou "assets/fundo.png", 
+            # precisamos alinhar isso. Por enquanto mantemos o fluxo antigo.
+
             if not bg_path.exists():
                 self.log_panel.append(f"AVISO: Background não encontrado em {bg_path}")
             else:
@@ -253,40 +287,12 @@ class MainWindow(QMainWindow):
             self.log_panel.append(f"ERRO template: {e}")
             return
         
-        # --- MVP V2: gerar 1 overlay (apenas caixa 'nome') usando a primeira linha rich
-        try:
-            row_rich_0 = self._last_rows_rich[0]
-            nome_html = row_rich_0.get("nome", "")
-
-            # acha a box "nome" dentro do template
-            box_nome = None
-            for b in tpl.boxes:
-                if str(b.get("id", "")).strip().lower() == "nome":
-                    box_nome = b
-                    break
-
-            if not box_nome:
-                self.log_panel.append("ERRO: template não possui box com id='nome'")
-                return
-
-            out_overlay = model_dir / "debug_overlay_nome.png"
-            self.typo_engine.render_overlay_one_box(
-                width=tpl.width,
-                height=tpl.height,
-                box=box_nome,
-                html_text=nome_html,
-                out_path=out_overlay
-            )
-            self.log_panel.append(f"Overlay gerado (MVP): {out_overlay}")
-        except Exception as e:
-            self.log_panel.append(f"ERRO ao gerar overlay MVP: {e}")
-            return
-
+        # --- MVP V2: Gerar nomes (mantido igual)
         self.log_panel.append(f"Gerando nomes (pattern: {self.current_output_pattern})")
         
         for row in rows_plain:
             name = build_output_filename(self.current_output_pattern, row, used)
-            self.log_panel.append(f"Arquivo: {name}.png")
+            # self.log_panel.append(f"Arquivo: {name}.png") # Desabilitado pra não floodar
 
     def _open_models_manager(self):
         # Pega a lista atual do ComboBox (por enquanto ela é nossa "fonte de modelos")
@@ -317,6 +323,9 @@ class MainWindow(QMainWindow):
 
 
     def _open_model_dialog(self):
+        # ATENÇÃO: ModelConfigDialog ainda precisa de update para o novo scanner
+        # Se abrir agora e clicar em "Analisar", vai crashar.
+        # Vamos tratar isso no próximo passo.
         dlg = ModelConfigDialog(self)
         if dlg.exec():
             self.log_panel.append("Modelo configurado (Etapa 1): diálogo confirmado.")

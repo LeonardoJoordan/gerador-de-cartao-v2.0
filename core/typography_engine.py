@@ -17,23 +17,32 @@ class TypographyEngine:
     """
 
     def __init__(self):
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch()
-        self._ctx = self._browser.new_context()
+        try:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._ctx = self._browser.new_context()
+        except Exception as e:
+            print(f"Erro ao inicializar TypographyEngine: {e}")
+            self._pw = None
+            self._browser = None
+            self._ctx = None
 
     def close(self):
         try:
-            self._ctx.close()
-        except Exception:
-            pass
+            if self._ctx:
+                self._ctx.close()
+        except Exception as e:
+            print(f"Erro ao fechar contexto: {e}")
         try:
-            self._browser.close()
-        except Exception:
-            pass
+            if self._browser:
+                self._browser.close()
+        except Exception as e:
+            print(f"Erro ao fechar browser: {e}")
         try:
-            self._pw.stop()
-        except Exception:
-            pass
+            if self._pw:
+                self._pw.stop()
+        except Exception as e:
+            print(f"Erro ao parar playwright: {e}")
 
     @staticmethod
     def _build_html_canvas(w: int, h: int, box: Dict[str, Any], html_text: str) -> str:
@@ -87,8 +96,8 @@ class TypographyEngine:
             white-space: pre-wrap;
             word-break: break-word;
 
-            f"box-sizing:border-box;"
-            f"border: 2px dashed rgba(255,0,0,0.80);"
+            box-sizing: border-box;
+            border: 2px dashed rgba(255,0,0,0.80);
 
             text-align: {align};
 
