@@ -6,13 +6,13 @@ from ui.controls_panel import ControlsPanel
 from ui.log_panel import LogPanel
 from ui.table_panel import TablePanel
 
-from load_model.dialog_model_config import ModelConfigDialog
+from ui.editor.editor_window import EditorWindow
 from load_model.dialog_model_manager import ModelManagerDialog
 
 from core.naming import build_output_filename
 from core.template_v2 import load_template_for_model, TemplateError
-from core.typography_engine import TypographyEngine
-from core.svg_scanner import scan_svg
+
+
 from core.model_v2 import build_model_from_scan
 from core.compositor import compose_png_over_background
 
@@ -55,8 +55,6 @@ class MainWindow(QMainWindow):
 
         self.controls_panel = ControlsPanel()
         self.log_panel = LogPanel()
-        # Engine tipográfico (Playwright)
-        self.typo_engine = TypographyEngine()
 
         left_stack.addWidget(self.preview_panel, 5)
         left_stack.addWidget(self.controls_panel, 0)
@@ -72,9 +70,7 @@ class MainWindow(QMainWindow):
         self.btn_generate_cards.setMinimumHeight(44)  # opcional: deixa mais “botão principal”
         self.btn_generate_cards.clicked.connect(self._generate_cards_placeholder)
         app = QApplication.instance()
-        if app is not None:
-            app.aboutToQuit.connect(self.typo_engine.close)
-            left_stack.addWidget(self.btn_generate_cards, 0)
+        left_stack.addWidget(self.btn_generate_cards, 0)
 
         # --- Painel DIREITO (Tabela)
         self.table_panel = TablePanel()
@@ -327,12 +323,11 @@ class MainWindow(QMainWindow):
 
 
     def _open_model_dialog(self):
-        dlg = ModelConfigDialog(self)
-        if dlg.exec():
-            self.log_panel.append("Modelo configurado (Etapa 1): diálogo confirmado.")
-
-            if getattr(dlg, "output_pattern", ""):
-                self.current_output_pattern = dlg.output_pattern
-                self.log_panel.append(f"Padrão de saída definido: {self.current_output_pattern}")
-        else:
-            self.log_panel.append("Configuração de modelo cancelada.")
+        """
+        Abre o novo Editor Visual em vez do configurador antigo.
+        """
+        self.log_panel.append("Abrindo Editor Visual...")
+        
+        # Mantemos 'self' como pai para a janela não se perder
+        self.editor_window = EditorWindow(self)
+        self.editor_window.show()
