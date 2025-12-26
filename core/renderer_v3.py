@@ -59,6 +59,26 @@ class NativeRenderer:
 
         # 2. CAMADA TEXTO
         for box in self.tpl.get("boxes", []):
+            # --- Lógica de Renderização Condicional ---
+            # 1. Encontra quais variáveis ({nome}, {data}) esta caixa está pedindo
+            needed_vars = re.findall(r"\{([a-zA-Z0-9_]+)\}", box["html"])
+            
+            should_skip = False
+            for var in needed_vars:
+                # 2. Busca o valor na linha de dados
+                val = row_rich.get(var, "")
+                
+                # 3. Limpa tags HTML simples para verificar se é só espaço vazio
+                # (Isso evita que um '<b> </b>' seja considerado conteúdo)
+                clean_val = re.sub(r"<[^>]+>", "", str(val)).strip()
+                
+                # 4. Se a variável for vazia, condena a caixa inteira à invisibilidade
+                if not clean_val:
+                    should_skip = True
+                    break
+            
+            if should_skip:
+                continue # Pula para a próxima caixa, ignorando esta
             try:
                 html_resolved = self.resolve_html(box["html"], row_rich)
                 self._draw_html_box(painter, box, html_resolved)
@@ -89,6 +109,21 @@ class NativeRenderer:
         doc.setDocumentMargin(0) # Remove margens padrão
         doc.setDefaultStyleSheet("body { color: black; }")
         doc.setHtml(html_text)
+
+        # [FIX] Força o alinhamento horizontal baseado no JSON
+        align_str = box_data.get("align", "left")
+        opts = doc.defaultTextOption()
+        
+        if align_str == "center":
+            opts.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        elif align_str == "right":
+            opts.setAlignment(Qt.AlignmentFlag.AlignRight)
+        elif align_str == "justify":
+            opts.setAlignment(Qt.AlignmentFlag.AlignJustify)
+        else:
+            opts.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            
+        doc.setDefaultTextOption(opts)
         
         w = box_data.get("w", 300)
         h = box_data.get("h", 100)

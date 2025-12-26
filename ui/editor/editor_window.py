@@ -459,6 +459,10 @@ class EditorWindow(QMainWindow):
                 box.text_item.setHtml(b["html"])
             
             box.vertical_align = b.get("vertical_align", "top")
+
+            # [FIX] Aplica o alinhamento horizontal visualmente ao carregar
+            if "align" in b:
+                box.set_alignment(b["align"])
             
             # Adicionamos à cena
             self.scene.addItem(box)
