@@ -35,10 +35,16 @@ class RichTableWidget(QTableWidget):
         start_col = start.column() if start.isValid() else 0
 
         for r, row in enumerate(grid):
+            # Se a colagem vai exceder o número de linhas, cria novas linhas
+            if (start_row + r) >= self.rowCount():
+                self.setRowCount(start_row + r + 1)
+
             for c, cell in enumerate(row):
                 rr = start_row + r
                 cc = start_col + c
-                if rr >= self.rowCount() or cc >= self.columnCount():
+                
+                # Ignora apenas se exceder COLUNAS (pois colunas são fixas do modelo)
+                if cc >= self.columnCount():
                     continue
 
                 item = self.item(rr, cc)
@@ -64,13 +70,6 @@ class TablePanel(QWidget):
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
         layout.addWidget(title)
 
-        self.table = RichTableWidget(8, 4)
-        self.table.setHorizontalHeaderLabels(["nome", "mensagem", "data", "comandante"])
+        self.table = RichTableWidget(0, 0)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table, 1)
-
-        # exemplo
-        self.table.setItem(0, 0, QTableWidgetItem("João Carlos SILVA Pereira"))
-        self.table.setItem(0, 1, QTableWidgetItem("Mensagem de exemplo...\nCom quebra de linha."))
-        self.table.setItem(0, 2, QTableWidgetItem("12 DE DEZEMBRO DE 2025"))
-        self.table.setItem(0, 3, QTableWidgetItem("Cel Fulano de Tal"))

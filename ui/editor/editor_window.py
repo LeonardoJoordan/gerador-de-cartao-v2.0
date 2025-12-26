@@ -132,6 +132,16 @@ class EditorWindow(QMainWindow):
         # Conecta evento de seleção da cena
         self.scene.selectionChanged.connect(self.on_selection_changed)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Garante o fit ao exibir a janela pela primeira vez
+        self._zoom_to_fit()
+
+    def _zoom_to_fit(self):
+        """Ajusta o zoom para que a cena inteira caiba na visualização."""
+        if not self.scene.sceneRect().isEmpty():
+            self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+    
     def _add_separator(self, layout):
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -358,6 +368,9 @@ class EditorWindow(QMainWindow):
         # Oculta o fundo branco padrão
         self.fallback_bg.hide()
 
+        # Ajusta o zoom para caber na tela
+        self._zoom_to_fit()
+
     def _on_click_load_bg(self):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(self, "Selecionar Fundo", "", "Imagens (*.png *.jpg *.jpeg)")
@@ -458,5 +471,7 @@ class EditorWindow(QMainWindow):
                 indent=b.get("indent_px", 0),
                 line_height=b.get("line_height", 1.15)
             )
+        # Ajusta o zoom ao terminar de carregar
+        self._zoom_to_fit()
 
         self.setWindowTitle(f"Editor Visual de Modelo - {data['name']}")

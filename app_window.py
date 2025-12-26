@@ -6,11 +6,11 @@ from ui.preview_panel import PreviewPanel
 from ui.controls_panel import ControlsPanel
 from ui.log_panel import LogPanel
 from ui.table_panel import TablePanel
-
+from core.renderer_v3 import NativeRenderer
 from ui.editor.editor_window import EditorWindow
-
 from core.naming import build_output_filename
-
+import json
+from core.template_v2 import slugify_model_name
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -49,12 +49,6 @@ class MainWindow(QMainWindow):
         left_stack.addWidget(self.controls_panel, 0)
         left_stack.addWidget(self.log_panel, 3)
 
-        # modelo ativo (vamos usar isso pra achar models/<slug>/template_v2.json)
-        self.active_model_name = self.preview_panel.cbo_models.currentText()
-
-        # atualiza preview + log já na inicialização (agora o log_panel já existe)
-        self._on_model_changed(self.active_model_name)
-
         self.btn_generate_cards = QPushButton("Gerar cartões")
         self.btn_generate_cards.setMinimumHeight(44)  # opcional: deixa mais “botão principal”
         self.btn_generate_cards.clicked.connect(self._generate_cards_placeholder)
@@ -67,6 +61,9 @@ class MainWindow(QMainWindow):
 
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
+
+        self.active_model_name = self.preview_panel.cbo_models.currentText()
+        self._on_model_changed(self.active_model_name)
 
         # quando trocar o modelo no combo, atualiza estado
         self.preview_panel.cbo_models.currentTextChanged.connect(self._on_model_changed)
@@ -124,14 +121,56 @@ class MainWindow(QMainWindow):
         self.log_panel.append(f"Modelo ativo: {name}")
         self.active_model_name = name
 
+        # Carrega colunas dinamicamente do JSON V3
+        if not name: return
+
+        slug = slugify_model_name(name)
+        json_path = Path("models") / slug / "template_v3.json"
+
+        if json_path.exists():
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    placeholders = data.get("placeholders", [])
+                    
+                    # Atualiza a tabela (headers)
+                    self._update_table_columns(placeholders)
+                    self.log_panel.append(f"Colunas carregadas: {placeholders}")
+                    try:
+                        renderer = NativeRenderer(data)
+                        # Gera o pixmap em memória (com placeholders preenchidos ex: {nome})
+                        preview_pix = renderer.render_to_pixmap(row_rich=None)
+                        self.preview_panel.set_preview_pixmap(preview_pix)
+                        self.log_panel.append("Preview gerado com sucesso (incluindo camadas de texto)")
+                    except Exception as e:
+                        import traceback
+                        self.log_panel.append(f"Erro ao gerar preview: {e}")
+                        self.log_panel.append(f"Traceback: {traceback.format_exc()}")
+                        # Fallback: não mostra nada (mantém preview vazio ou com mensagem de erro)
+                        self.preview_panel.set_preview_text("Erro ao gerar preview do modelo")
+            except Exception as e:
+                self.log_panel.append(f"Erro ao ler colunas do modelo: {e}")
+        else:
+            self.log_panel.append("Aviso: template_v3.json não encontrado para este modelo.")
+
     def _update_table_columns(self, placeholders):
         """Atualiza os cabeçalhos da tabela baseada nos placeholders do modelo."""
+        # 1. Limpa tudo (zera colunas e linhas)
+        self.table_panel.table.clearContents()
+        self.table_panel.table.setRowCount(0)
+        self.table_panel.table.setColumnCount(0)
+        
         if not placeholders:
             return
             
+        # 2. Cria as colunas novas
         self.table_panel.table.setColumnCount(len(placeholders))
         self.table_panel.table.setHorizontalHeaderLabels(placeholders)
-        self.log_panel.append(f"Tabela atualizada com colunas: {', '.join(placeholders)}")
+        
+        # 3. Garante pelo menos uma linha vazia para o usuário começar a digitar
+        self.table_panel.table.setRowCount(1)
+        
+        self.log_panel.append(f"Tabela configurada: {len(placeholders)} colunas ({', '.join(placeholders)})")
 
     def _open_model_dialog(self):
         if not self.active_model_name:
