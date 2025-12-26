@@ -98,9 +98,9 @@ class Guideline(QGraphicsLineItem):
 class DesignerBox(QGraphicsRectItem):
     SNAP_DISTANCE = 15
 
-    def __init__(self, x, y, w, h, text="Placeholder"):
+    def __init__(self, x=0, y=0, w=300, h=60, text="Placeholder"):
         super().__init__(0, 0, w, h)
-        self.setPos(x, y) 
+        self.setPos(x, y)
         
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable | 
@@ -164,7 +164,6 @@ class DesignerBox(QGraphicsRectItem):
         if line_height is not None:
             fmt.setLineHeight(line_height * 100.0, 1)
         cursor.mergeBlockFormat(fmt)
-        self.text_item.document().setDefaultBlockFormat(fmt)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():

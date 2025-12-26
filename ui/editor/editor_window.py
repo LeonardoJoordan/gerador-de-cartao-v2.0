@@ -1,10 +1,12 @@
 # ui/editor/editor_window.py
+
 import json
 from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QWidget, 
                                QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, 
-                               QMessageBox)
+                               QMessageBox, QInputDialog)
 from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from pathlib import Path
 
 # Importa os módulos que acabamos de separar
 from .canvas_items import DesignerBox, Guideline, px_to_mm, SignatureItem
@@ -12,6 +14,7 @@ from .panels import CaixaDeTextoPanel, EditorDeTextoPanel, AssinaturaPanel
 
 
 class EditorWindow(QMainWindow):
+    modelSaved = Signal(list)
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Editor Visual de Modelo (AutoMakeCard)")
@@ -303,10 +306,30 @@ class EditorWindow(QMainWindow):
             "signatures": signatures_data,
             "boxes": boxes_data
         }
+                
+        # 1. Define o nome do arquivo/pasta (slug)
+        from core.template_v2 import slugify_model_name
+        model_name = self.windowTitle().replace("Editor Visual de Modelo - ", "")
+        if not model_name or "AutoMakeCard" in model_name:
+            model_name, ok = QInputDialog.getText(self, "Salvar Modelo", "Nome do Modelo:")
+            if not ok or not model_name: return
+            self.setWindowTitle(f"Editor Visual de Modelo - {model_name}")
+
+        slug = slugify_model_name(model_name)
+        model_dir = Path("models") / slug
+        model_dir.mkdir(parents=True, exist_ok=True)
         
-        import json
-        print(json.dumps(data, indent=2))
-        QMessageBox.information(self, "Modelo V3", "Estrutura de dados exportada com sucesso (veja o console).")
+        file_path = model_dir / "template_v3.json"
+        
+        # 2. Salva o JSON
+        data["name"] = model_name
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+            
+        # Avisa aos interessados quais são as variáveis deste modelo
+        self.modelSaved.emit(data["placeholders"])
+        
+        QMessageBox.information(self, "Sucesso", f"Modelo '{model_name}' salvo com sucesso em:\n{file_path}")
 
     def update_signature_size(self, size):
         sel = self.scene.selectedItems()
@@ -367,3 +390,73 @@ class EditorWindow(QMainWindow):
         vars_detectadas = self.get_all_model_placeholders()
         if vars_detectadas:
             print(f"Variáveis detectadas no modelo: {vars_detectadas}")
+
+    def load_from_json(self, file_path):
+        """Carrega um modelo V3 e reconstrói o canvas."""
+        import json
+        path = Path(file_path)
+        if not path.exists():
+            return
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # 1. Limpa o canvas atual
+        self.scene.clear()
+        self.background_path = None
+        self.bg_item = None
+        
+        # Restaura o tamanho da cena
+        canvas_w = data.get("canvas_size", {}).get("w", 1000)
+        canvas_h = data.get("canvas_size", {}).get("h", 1000)
+        self.scene.setSceneRect(0, 0, canvas_w, canvas_h)
+        
+        # Recria o fallback (necessário pois o clear remove tudo)
+        self.fallback_bg = self.scene.addRect(0, 0, canvas_w, canvas_h, QPen(Qt.PenStyle.NoPen), QBrush(Qt.GlobalColor.white))
+        self.fallback_bg.setZValue(-100)
+
+        # 2. Restaura o Fundo
+        if data.get("background_path"):
+            bg_path = data["background_path"]
+            if Path(bg_path).exists():
+                self.load_background_image(bg_path)
+
+        # 3. Restaura as Assinaturas
+        from .canvas_items import SignatureItem
+        for sig_data in data.get("signatures", []):
+            if Path(sig_data["path"]).exists():
+                sig = SignatureItem(sig_data["path"])
+                sig.setPos(sig_data["x"], sig_data["y"])
+                sig.resize_by_longest_side(sig_data["longest_side"])
+                self.scene.addItem(sig)
+
+        # 4. Restaura as Caixas de Texto
+        for b in data.get("boxes", []):
+            # Criamos a box com as coordenadas e tamanho corretos
+            box = DesignerBox(
+                x=b.get("x", 0), 
+                y=b.get("y", 0), 
+                w=b.get("w", 300), 
+                h=b.get("h", 60), 
+                text=b.get("id", "Placeholder") # Texto puro inicial
+            )
+            
+            # Agora aplicamos o HTML (texto rico) que contém a formatação (negrito, etc)
+            if "html" in b:
+                box.text_item.setHtml(b["html"])
+            
+            box.vertical_align = b.get("vertical_align", "top")
+            
+            # Adicionamos à cena
+            self.scene.addItem(box)
+            
+            # Força a atualização da posição do texto dentro da caixa
+            box.recalculate_text_position()
+            
+            # Aplica recuo e entrelinha salvos
+            box.set_block_format(
+                indent=b.get("indent_px", 0),
+                line_height=b.get("line_height", 1.15)
+            )
+
+        self.setWindowTitle(f"Editor Visual de Modelo - {data['name']}")

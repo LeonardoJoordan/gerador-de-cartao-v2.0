@@ -1,4 +1,5 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QPushButton, QApplication
+from pathlib import Path
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QPushButton, QApplication, QMessageBox, QAbstractItemView
 from PySide6.QtCore import Qt
 
 from ui.preview_panel import PreviewPanel
@@ -7,7 +8,6 @@ from ui.log_panel import LogPanel
 from ui.table_panel import TablePanel
 
 from ui.editor.editor_window import EditorWindow
-from load_model.dialog_model_manager import ModelManagerDialog
 
 from core.naming import build_output_filename
 
@@ -40,13 +40,7 @@ class MainWindow(QMainWindow):
         self.preview_panel = PreviewPanel()
 
         # Modelos fake só para teste visual (depois virão do catálogo)
-        self.preview_panel.cbo_models.addItems([
-            "Cartão Aniversário",
-            "Cartão Promoção",
-            "Cartão Despedida",
-            "Cartão Boas-vindas",
-            "Cartão Condolências"
-        ])
+        self._reload_models_from_disk()
 
         self.controls_panel = ControlsPanel()
         self.log_panel = LogPanel()
@@ -74,54 +68,173 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
 
-        # Por enquanto: abrir diálogo no botão "Configurar modelo"
+        # quando trocar o modelo no combo, atualiza estado
+        self.preview_panel.cbo_models.currentTextChanged.connect(self._on_model_changed)
+
+        # botões novos
+        self.controls_panel.btn_add_model.clicked.connect(self._on_add_model)
+        self.controls_panel.btn_remove_model.clicked.connect(self._on_remove_model)
         self.controls_panel.btn_config_model.clicked.connect(self._open_model_dialog)
-        self.controls_panel.btn_manage_models.clicked.connect(self._open_models_manager)
 
     def _generate_cards_placeholder(self):
-        self.log_panel.append("Iniciando geração de cartões (Fluxo V3 - QPainter)...")
-        # Por enquanto, apenas valida se há dados na tabela
-        rows = self.table_panel.table.rowCount()
-        if rows == 0:
-            self.log_panel.append("Erro: Tabela vazia.")
+        # 1. Verifica se temos um modelo carregado (o JSON gerado pelo editor)
+        # Para este MVP, vamos buscar o template_v3.json do modelo ativo
+        from core.template_v2 import slugify_model_name
+        from core.naming import build_output_filename
+        from core.renderer_v3 import NativeRenderer
+        import json
+        from pathlib import Path
+
+        slug = slugify_model_name(self.active_model_name)
+        template_path = Path("models") / slug / "template_v3.json"
+
+        if not template_path.exists():
+            self.log_panel.append(f"ERRO: O modelo '{self.active_model_name}' não foi configurado no Editor V3.")
             return
-        self.log_panel.append(f"Pronto para processar {rows} registros via Editor Visual.")
 
+        with open(template_path, "r", encoding="utf-8") as f:
+            tpl_data = json.load(f)
 
-    def _open_models_manager(self):
-        # Pega a lista atual do ComboBox (por enquanto ela é nossa "fonte de modelos")
-        models = [self.preview_panel.cbo_models.itemText(i) for i in range(self.preview_panel.cbo_models.count())]
+        # 2. Prepara o motor e dados
+        renderer = NativeRenderer(tpl_data)
+        rows_plain = self._last_rows_plain # Capturados na leitura da tabela
+        rows_rich = self._last_rows_rich
+        
+        output_dir = Path("output") / slug
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        used_names = set()
+        self.log_panel.append(f"Iniciando renderização de {len(rows_plain)} cartões...")
 
-        dlg = ModelManagerDialog(self, initial_models=models)
-        if dlg.exec() and dlg.selected_model_name:
-            # Atualiza combo para refletir a lista do diálogo (por enquanto, só reconstruímos)
-            self.preview_panel.cbo_models.blockSignals(True)
-            self.preview_panel.cbo_models.clear()
-            for i in range(dlg.list_models.count()):
-                self.preview_panel.cbo_models.addItem(dlg.list_models.item(i).text())
-            self.preview_panel.cbo_models.blockSignals(False)
+        # 3. Loop de geração
+        for i, row in enumerate(rows_plain):
+            # Define nome do arquivo (ex: cartao_Joao.png)
+            filename = build_output_filename(self.current_output_pattern, row, used_names)
+            out_path = output_dir / f"{filename}.png"
+            
+            # Renderiza nativamente
+            renderer.render_row(row, rows_rich[i], out_path)
+            self.log_panel.append(f"[OK] Gerado: {out_path.name}")
 
-            # Seleciona o modelo escolhido
-            idx = self.preview_panel.cbo_models.findText(dlg.selected_model_name)
-            if idx >= 0:
-                self.preview_panel.cbo_models.setCurrentIndex(idx)
+        self.log_panel.append(f"=== Processo concluído! Arquivos em: {output_dir} ===")
 
-            self.log_panel.append(f"Modelo selecionado no gerenciador: {dlg.selected_model_name}")
-        else:
-            self.log_panel.append("Gerenciar modelos: fechado sem selecionar.")
 
     def _on_model_changed(self, name: str):
         self.preview_panel.set_preview_text(f"Prévia do modelo selecionado:\n{name}")
         self.log_panel.append(f"Modelo ativo: {name}")
         self.active_model_name = name
 
+    def _update_table_columns(self, placeholders):
+        """Atualiza os cabeçalhos da tabela baseada nos placeholders do modelo."""
+        if not placeholders:
+            return
+            
+        self.table_panel.table.setColumnCount(len(placeholders))
+        self.table_panel.table.setHorizontalHeaderLabels(placeholders)
+        self.log_panel.append(f"Tabela atualizada com colunas: {', '.join(placeholders)}")
 
     def _open_model_dialog(self):
-        """
-        Abre o novo Editor Visual em vez do configurador antigo.
-        """
-        self.log_panel.append("Abrindo Editor Visual...")
-        
-        # Mantemos 'self' como pai para a janela não se perder
+        if not self.active_model_name:
+            QMessageBox.warning(self, "Atenção", "Selecione um modelo na lista antes de configurar.")
+            return
+
         self.editor_window = EditorWindow(self)
+        self.editor_window.modelSaved.connect(self._update_table_columns)
+
+        from core.template_v2 import slugify_model_name
+        slug = slugify_model_name(self.active_model_name)
+        json_path = Path("models") / slug / "template_v3.json"
+
+        if json_path.exists():
+            self.log_panel.append(f"A carregar ficheiro: {json_path}")
+            self.editor_window.load_from_json(str(json_path))
+        else:
+            self.log_panel.append("Nenhum ficheiro V3 encontrado. A iniciar modelo novo.")
+        
         self.editor_window.show()
+
+    def _reload_models_from_disk(self, select_name: str | None = None):
+        """Recarrega o ComboBox com base em models/*/template_v3.json"""
+        from pathlib import Path
+        import json
+
+        self.preview_panel.cbo_models.blockSignals(True)
+        self.preview_panel.cbo_models.clear()
+
+        models_dir = Path("models")
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        found = []
+        for folder in sorted(models_dir.iterdir()):
+            if not folder.is_dir():
+                continue
+            json_path = folder / "template_v3.json"
+            if json_path.exists():
+                try:
+                    data = json.loads(json_path.read_text(encoding="utf-8"))
+                    name = data.get("name", folder.name)
+                    found.append(name)
+                except Exception:
+                    # se um json estiver corrompido, só ignora
+                    continue
+
+        for name in found:
+            self.preview_panel.cbo_models.addItem(name)
+
+        self.preview_panel.cbo_models.blockSignals(False)
+
+        # selecionar algo após reload
+        if select_name:
+            idx = self.preview_panel.cbo_models.findText(select_name)
+            if idx >= 0:
+                self.preview_panel.cbo_models.setCurrentIndex(idx)
+                return
+
+        # se não passou select_name, seleciona o primeiro automaticamente
+        if self.preview_panel.cbo_models.count() > 0:
+            self.preview_panel.cbo_models.setCurrentIndex(0)
+
+
+    def _on_add_model(self):
+        """Adicionar modelo = abrir editor em branco."""
+        self.editor_window = EditorWindow(self)
+        self.editor_window.modelSaved.connect(self._update_table_columns)
+        self.editor_window.show()
+
+
+    def _on_remove_model(self):
+        """Remove do disco o modelo ativo/selecionado no combo."""
+        from pathlib import Path
+        import shutil
+        from PySide6.QtWidgets import QMessageBox
+        from core.template_v2 import slugify_model_name
+
+        model_name = (self.preview_panel.cbo_models.currentText() or "").strip()
+        if not model_name:
+            QMessageBox.warning(self, "Atenção", "Nenhum modelo selecionado para remover.")
+            return
+
+        slug = slugify_model_name(model_name)
+        model_dir = Path("models") / slug
+
+        if not model_dir.exists():
+            QMessageBox.warning(self, "Erro", f"Pasta do modelo não encontrada:\n{model_dir}")
+            return
+
+        resp = QMessageBox.question(
+            self,
+            "Confirmar exclusão",
+            f"Tem certeza que deseja excluir o modelo:\n\n{model_name}\n\nIsso apagará a pasta:\n{model_dir}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            shutil.rmtree(model_dir)
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao excluir o modelo:\n{e}")
+            return
+
+        self.log_panel.append(f"Modelo excluído: {model_name}")
+        self._reload_models_from_disk()
