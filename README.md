@@ -1,4 +1,4 @@
-# AutoMakeCard V2
+# Gerador de Cartão em Lote v3.0
 
 Gerador de cartões tipograficamente avançado, baseado em modelos SVG e renderização HTML/CSS.
 

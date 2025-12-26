@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTextCursor, QTextBlockFormat, QTextCharFormat
 
 # Importação para Type Hinting (ajuda na IDE)
-from .canvas_items import DesignerBox
+from .canvas_items import DesignerBox, SignatureItem
 
 # --- 3. Painel de Propriedades (Dimensões) ---
 class CaixaDeTextoPanel(QWidget):
@@ -242,4 +242,33 @@ class EditorDeTextoPanel(QWidget):
         else:
             self.spin_lh.setValue(1.15)
 
+        self.blockSignals(False)
+
+class AssinaturaPanel(QWidget):
+    sideChanged = Signal(int)
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        
+        lbl = QLabel("PROPRIEDADES DA ASSINATURA")
+        lbl.setStyleSheet("font-weight: bold; font-size: 12px; margin-bottom: 5px;")
+        layout.addWidget(lbl)
+        
+        form = QFormLayout()
+        self.spin_size = QSpinBox()
+        self.spin_size.setRange(10, 2000)
+        self.spin_size.setSuffix(" px")
+        self.spin_size.setToolTip("Define o tamanho do maior lado (largura ou altura)")
+        self.spin_size.valueChanged.connect(self.sideChanged.emit)
+        
+        form.addRow("Lado Maior:", self.spin_size)
+        layout.addLayout(form)
+        layout.addStretch()
+
+    def load_from_item(self, item: SignatureItem):
+        self.blockSignals(True)
+        # O lado maior atual é o máximo entre width e height da pixmap
+        rect = item.pixmap().rect()
+        self.spin_size.setValue(max(rect.width(), rect.height()))
         self.blockSignals(False)

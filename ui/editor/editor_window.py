@@ -7,8 +7,8 @@ from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction
 from PySide6.QtCore import Qt
 
 # Importa os módulos que acabamos de separar
-from .canvas_items import DesignerBox, Guideline, px_to_mm
-from .panels import CaixaDeTextoPanel, EditorDeTextoPanel
+from .canvas_items import DesignerBox, Guideline, px_to_mm, SignatureItem
+from .panels import CaixaDeTextoPanel, EditorDeTextoPanel, AssinaturaPanel
 
 
 class EditorWindow(QMainWindow):
@@ -24,21 +24,20 @@ class EditorWindow(QMainWindow):
 
         # --- 1. ÁREA DE DESENHO (CENA) ---
         # Tamanho fixo inicial de 1000x1000 (será dinâmico no futuro com a imagem de fundo)
-        self.scene = QGraphicsScene(0, 0, 1000, 1000) 
+        self.scene = QGraphicsScene(0, 0, 1000, 1000)
         
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setBackgroundBrush(QBrush(QColor("#e0e0e0")))
         self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         
-        # Retângulo branco representando o papel/cartão
-        self.bg_rect = self.scene.addRect(0, 0, 1000, 1000, QPen(Qt.PenStyle.NoPen), QBrush(Qt.GlobalColor.white))
-        self.bg_rect.setZValue(-100)
+        # Referências para o fundo (Imagem ou Fallback branco)
+        self.bg_item = None  # Armazenará o QGraphicsPixmapItem da imagem
+        self.background_path = None
         
-        # Info de debug (tamanho)
-        total_w_mm = px_to_mm(1000)
-        total_h_mm = px_to_mm(1000)
-        self.scene.addText(f"Canvas: {total_w_mm:.1f}mm x {total_h_mm:.1f}mm").setPos(10, 10)
+        # Retângulo branco de fallback (mantém a área visível se não houver imagem)
+        self.fallback_bg = self.scene.addRect(0, 0, 1000, 1000, QPen(Qt.PenStyle.NoPen), QBrush(Qt.GlobalColor.white))
+        self.fallback_bg.setZValue(-100)
         
         main_layout.addWidget(self.view, 1)
 
@@ -77,6 +76,13 @@ class EditorWindow(QMainWindow):
         self.btn_add.setMinimumHeight(40)
         self.btn_add.clicked.connect(self.add_new_box)
         ly_boxes.addWidget(self.btn_add)
+        self.btn_add_bg = QPushButton("🖼️ Definir Imagem de Fundo")
+        self.btn_add_bg.clicked.connect(self._on_click_load_bg)
+        ly_boxes.addWidget(self.btn_add_bg)
+
+        self.btn_add_sig = QPushButton("✍️ Adicionar Assinatura")
+        self.btn_add_sig.clicked.connect(self._on_click_add_signature)
+        ly_boxes.addWidget(self.btn_add_sig)
         right_layout.addWidget(grp_boxes)
 
         # Separador
@@ -93,8 +99,10 @@ class EditorWindow(QMainWindow):
 
         self.editor_texto_panel = EditorDeTextoPanel()
         self.editor_texto_panel.setEnabled(False)
+
         # Conexões dos sinais do painel para os slots desta janela
         self.editor_texto_panel.htmlChanged.connect(self.update_text_html)
+        self.editor_texto_panel.htmlChanged.connect(self._on_content_updated)
         self.editor_texto_panel.fontFamilyChanged.connect(self.update_font_family)
         self.editor_texto_panel.fontSizeChanged.connect(self.update_font_size)
         self.editor_texto_panel.alignChanged.connect(self.update_align)
@@ -102,6 +110,11 @@ class EditorWindow(QMainWindow):
         self.editor_texto_panel.indentChanged.connect(self.update_indent)
         self.editor_texto_panel.lineHeightChanged.connect(self.update_line_height)
         right_layout.addWidget(self.editor_texto_panel)
+
+        self.assinatura_panel = AssinaturaPanel()
+        self.assinatura_panel.setVisible(False) # Começa oculto
+        self.assinatura_panel.sideChanged.connect(self.update_signature_size)
+        right_layout.addWidget(self.assinatura_panel)
 
         # Botão Salvar
         right_layout.addStretch()
@@ -149,7 +162,9 @@ class EditorWindow(QMainWindow):
     def on_selection_changed(self):
         sel = self.scene.selectedItems()
         boxes = [i for i in sel if isinstance(i, DesignerBox)]
+        signatures = [i for i in sel if isinstance(i, SignatureItem)]
         
+        # Painéis de Texto
         if boxes:
             target_box = boxes[0]
             # Carrega dados da box nos painéis
@@ -161,6 +176,13 @@ class EditorWindow(QMainWindow):
         else:
             self.editor_texto_panel.setEnabled(False)
             self.caixa_texto_panel.setEnabled(False)
+
+        # Painel de Assinatura
+        if signatures:
+            self.assinatura_panel.load_from_item(signatures[0])
+            self.assinatura_panel.setVisible(True)
+        else:
+            self.assinatura_panel.setVisible(False)
 
     def _get_selected(self) -> DesignerBox | None:
         sel = self.scene.selectedItems()
@@ -221,15 +243,20 @@ class EditorWindow(QMainWindow):
     # --- Exportação ---
     def export_to_json(self):
         """
-        Gera a estrutura de dados JSON baseada no que está na tela.
-        No futuro, isso salvará no arquivo template.json real.
+        Gera a estrutura de dados JSON unificada para o novo modelo V3.
+        Salva: Background, Assinaturas e Caixas de Texto.
         """
         boxes_data = []
+        signatures_data = []
+        
+        # Percorre os itens da cena para separar assinaturas e caixas
         for item in self.scene.items():
+            # 1. Processar Caixas de Texto
             if isinstance(item, DesignerBox):
                 pos = item.pos()
                 r = item.rect()
                 font = item.text_item.font()
+                fmt = item.text_item.document().begin().blockFormat()
                 
                 # Alinhamento Horizontal
                 opt = item.text_item.document().defaultTextOption()
@@ -239,16 +266,9 @@ class EditorWindow(QMainWindow):
                 elif h_code & Qt.AlignmentFlag.AlignRight: h_align = "right"
                 elif h_code & Qt.AlignmentFlag.AlignJustify: h_align = "justify"
 
-                # Formatação de Bloco
-                fmt = item.text_item.document().begin().blockFormat()
-                lh = 1.15
-                if fmt.lineHeightType() == 1: # ProportionalHeight
-                    lh = fmt.lineHeight() / 100.0
-
-                box_dict = {
+                boxes_data.append({
                     "id": item.text_item.toPlainText().replace("{", "").replace("}", "").strip(),
                     "html": item.text_item.toHtml(),
-                    "text_clean": item.text_item.toPlainText(),
                     "x": int(pos.x()),
                     "y": int(pos.y()),
                     "w": int(r.width()),
@@ -258,18 +278,92 @@ class EditorWindow(QMainWindow):
                     "align": h_align,
                     "vertical_align": item.vertical_align,
                     "indent_px": int(fmt.textIndent()),
-                    "line_height": float(f"{lh:.2f}")
-                }
-                boxes_data.append(box_dict)
+                    "line_height": float(f"{fmt.lineHeight() / 100.0:.2f}") if fmt.lineHeightType() == 1 else 1.15
+                })
+            
+            # 2. Processar Assinaturas
+            elif isinstance(item, SignatureItem):
+                pos = item.pos()
+                pix = item.pixmap()
+                signatures_data.append({
+                    "path": getattr(item, "_original_path", ""), # Precisaremos guardar isso no item
+                    "x": int(pos.x()),
+                    "y": int(pos.y()),
+                    "width": int(pix.width()),
+                    "height": int(pix.height()),
+                    "longest_side": max(pix.width(), pix.height())
+                })
 
+        # Estrutura Final do Modelo V3
         data = {
-            "name": "modelo_editor_visual",
-            "boxes": boxes_data,
-            "canvas_w": int(self.scene.width()),
-            "canvas_h": int(self.scene.height())
+            "name": "modelo_v3_projeto",
+            "canvas_size": {"w": int(self.scene.width()), "h": int(self.scene.height())},
+            "background_path": self.background_path,
+            "placeholders": self.get_all_model_placeholders(),
+            "signatures": signatures_data,
+            "boxes": boxes_data
         }
         
-        # Por enquanto apenas imprime para debug (conforme POC)
-        # Na integração final, salvaremos em arquivo
+        import json
         print(json.dumps(data, indent=2))
-        QMessageBox.information(self, "Exportar JSON", "JSON gerado no console (Debug).\nPronto para salvar em arquivo.")
+        QMessageBox.information(self, "Modelo V3", "Estrutura de dados exportada com sucesso (veja o console).")
+
+    def update_signature_size(self, size):
+        sel = self.scene.selectedItems()
+        if sel and isinstance(sel[0], SignatureItem):
+            sel[0].resize_by_longest_side(size)
+    
+    def load_background_image(self, path):
+        """Carrega a imagem de fundo e ajusta o tamanho da cena."""
+        from PySide6.QtGui import QPixmap
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            return
+        
+        if self.bg_item:
+            self.scene.removeItem(self.bg_item)
+            
+        self.background_path = path
+        self.bg_item = self.scene.addPixmap(pixmap)
+        self.bg_item.setZValue(-95) # Acima do fallback, abaixo dos itens
+        
+        # Ajusta a cena e a visualização para o tamanho exato da imagem
+        rect = pixmap.rect()
+        self.scene.setSceneRect(rect)
+        self.view.setSceneRect(rect)
+        
+        # Oculta o fundo branco padrão
+        self.fallback_bg.hide()
+
+    def _on_click_load_bg(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Selecionar Fundo", "", "Imagens (*.png *.jpg *.jpeg)")
+        if path:
+            self.load_background_image(path)
+
+    def _on_click_add_signature(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Selecionar Assinatura", "", "Imagens (*.png)")
+        if path:
+            sig = SignatureItem(path)
+            # Posiciona no centro da visão atual para facilitar
+            center = self.view.mapToScene(self.view.viewport().rect().center())
+            sig.setPos(center)
+            self.scene.addItem(sig)
+
+    def get_all_model_placeholders(self):
+        """Varre o canvas e retorna o conjunto único de todos os placeholders."""
+        placeholders = set()
+        for item in self.scene.items():
+            if isinstance(item, DesignerBox):
+                placeholders.update(item.get_placeholders())
+        return sorted(list(placeholders))
+    
+    def _on_content_updated(self, html):
+        # Atualiza o texto na box (já existente)
+        self.update_text_html(html)
+        
+        # Detecta novos placeholders e loga no console por enquanto
+        vars_detectadas = self.get_all_model_placeholders()
+        if vars_detectadas:
+            print(f"Variáveis detectadas no modelo: {vars_detectadas}")

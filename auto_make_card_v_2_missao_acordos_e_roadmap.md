@@ -1,4 +1,4 @@
-# AutoMakeCard V2 — Missão, Acordos de Trabalho e Roadmap
+# Gerador de Cartão em Lote v3.0 — Missão, Acordos de Trabalho e Roadmap
 
 > **Este arquivo é a referência-mãe do projeto.**
 > Deve ser relido sempre que um novo chat for iniciado ou quando retomarmos o desenvolvimento após pausa.
@@ -222,5 +222,5 @@ Se algo parecer confuso, o projeto **para**, conversa-se, e só depois continua.
 
 ---
 
-📌 **Este arquivo deve ser reutilizado como prompt-base** para qualquer novo chat sobre o AutoMakeCard V2.
+📌 **Este arquivo deve ser reutilizado como prompt-base** para qualquer novo chat sobre o Gerador de Cartão em Lote v3.0.
 

@@ -193,14 +193,10 @@ class ModelManagerDialog(QDialog):
             return
 
         selected_model = item.text()
+        self.accept() # Fecha o gerenciador
 
-        # Fecha o diálogo atual
-        self.accept()
-
-        # Abre o diálogo de configuração do modelo
-        from load_model.dialog_model_config import ModelConfigDialog
-        config_dialog = ModelConfigDialog(self, initial_model_name=selected_model)
-        if config_dialog.exec():
-            self.selected_model_name = config_dialog.selected_model_name
-            self.accept()
+        # Abre o Editor Visual (novo fluxo)
+        from ui.editor.editor_window import EditorWindow
+        self.editor_ptr = EditorWindow(self.parent())
+        self.editor_ptr.show()
 
