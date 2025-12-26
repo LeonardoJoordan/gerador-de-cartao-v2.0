@@ -87,6 +87,7 @@ class NativeRenderer:
         
         doc = QTextDocument()
         doc.setDocumentMargin(0) # Remove margens padrão
+        doc.setDefaultStyleSheet("body { color: black; }")
         doc.setHtml(html_text)
         
         w = box_data.get("w", 300)

@@ -1,5 +1,7 @@
 from pathlib import Path
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QPushButton, QApplication, QMessageBox, QAbstractItemView
+from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+                                QSplitter, QPushButton, QApplication, QMessageBox,
+                                  QAbstractItemView, QLineEdit, QLabel, QFileDialog)
 from PySide6.QtCore import Qt
 
 from ui.preview_panel import PreviewPanel
@@ -49,6 +51,26 @@ class MainWindow(QMainWindow):
         left_stack.addWidget(self.controls_panel, 0)
         left_stack.addWidget(self.log_panel, 3)
 
+        # --- Seletor de Pasta de Saída ---
+        grp_out = QWidget()
+        ly_out = QHBoxLayout(grp_out)
+        ly_out.setContentsMargins(0, 0, 0, 0)
+
+        ly_out.addWidget(QLabel("Saída:"))
+        
+        self.txt_output_path = QLineEdit()
+        self.txt_output_path.setPlaceholderText("Padrão: ./output/nome_do_modelo")
+        # self.txt_output_path.setReadOnly(True) # Descomente se quiser impedir digitação manual
+        ly_out.addWidget(self.txt_output_path)
+
+        self.btn_sel_out = QPushButton("...")
+        self.btn_sel_out.setFixedWidth(40)
+        self.btn_sel_out.setToolTip("Selecionar pasta de destino")
+        self.btn_sel_out.clicked.connect(self._select_output_folder)
+        ly_out.addWidget(self.btn_sel_out)
+
+        left_stack.addWidget(grp_out, 0)
+
         self.btn_generate_cards = QPushButton("Gerar cartões")
         self.btn_generate_cards.setMinimumHeight(44)  # opcional: deixa mais “botão principal”
         self.btn_generate_cards.clicked.connect(self._generate_cards_placeholder)
@@ -74,8 +96,14 @@ class MainWindow(QMainWindow):
         self.controls_panel.btn_config_model.clicked.connect(self._open_model_dialog)
 
     def _generate_cards_placeholder(self):
-        # 1. Verifica se temos um modelo carregado (o JSON gerado pelo editor)
-        # Para este MVP, vamos buscar o template_v3.json do modelo ativo
+        # 1. Coleta dados frescos da tabela
+        rows_plain, rows_rich = self._scrape_table_data()
+        
+        if not rows_plain:
+            self.log_panel.append("AVISO: A tabela está vazia. Nada a gerar.")
+            return
+
+        # 2. Verifica modelo e caminhos
         from core.template_v2 import slugify_model_name
         from core.naming import build_output_filename
         from core.renderer_v3 import NativeRenderer
@@ -92,24 +120,28 @@ class MainWindow(QMainWindow):
         with open(template_path, "r", encoding="utf-8") as f:
             tpl_data = json.load(f)
 
-        # 2. Prepara o motor e dados
+        # 3. Prepara o motor e diretório de saída
         renderer = NativeRenderer(tpl_data)
-        rows_plain = self._last_rows_plain # Capturados na leitura da tabela
-        rows_rich = self._last_rows_rich
         
-        output_dir = Path("output") / slug
+        # Define diretório de saída (Personalizado ou Padrão)
+        custom_path = self.txt_output_path.text().strip()
+        if custom_path:
+            output_dir = Path(custom_path)
+        else:
+            output_dir = Path("output") / slug
+            
         output_dir.mkdir(parents=True, exist_ok=True)
         
         used_names = set()
         self.log_panel.append(f"Iniciando renderização de {len(rows_plain)} cartões...")
 
-        # 3. Loop de geração
+        # 4. Loop de geração
         for i, row in enumerate(rows_plain):
             # Define nome do arquivo (ex: cartao_Joao.png)
             filename = build_output_filename(self.current_output_pattern, row, used_names)
             out_path = output_dir / f"{filename}.png"
             
-            # Renderiza nativamente
+            # Renderiza nativamente usando os dados extraídos
             renderer.render_row(row, rows_rich[i], out_path)
             self.log_panel.append(f"[OK] Gerado: {out_path.name}")
 
@@ -277,3 +309,55 @@ class MainWindow(QMainWindow):
 
         self.log_panel.append(f"Modelo excluído: {model_name}")
         self._reload_models_from_disk()
+
+    def _scrape_table_data(self):
+        """Varre a QTableWidget e monta as listas de dados para o renderizador."""
+        table = self.table_panel.table
+        rows = table.rowCount()
+        cols = table.columnCount()
+        
+        headers = [table.horizontalHeaderItem(c).text() for c in range(cols)]
+        
+        data_plain = []
+        data_rich = []
+
+        # Pula a linha 0 se ela estiver vazia/inutilizável, mas no nosso caso
+        # assumimos que todas as linhas visíveis são dados.
+        for r in range(rows):
+            row_p = {}
+            row_r = {}
+            is_empty = True
+            
+            for c in range(cols):
+                key = headers[c]
+                item = table.item(r, c)
+                
+                # Se item for None, assume vazio
+                val_plain = item.text().strip() if item else ""
+                
+                # Tenta pegar o HTML rico (salvo no UserRole pelo paste), senão usa o texto puro
+                val_rich = item.data(Qt.ItemDataRole.UserRole) if item else ""
+                if not val_rich:
+                    val_rich = val_plain
+                
+                if val_plain:
+                    is_empty = False
+                    
+                row_p[key] = val_plain
+                # O renderizador espera chaves sem {}, mas o template usa {}.
+                # Vamos garantir compatibilidade salvando com a chave limpa
+                # (O renderer_v3 já trata isso, mas é bom garantir).
+                row_r[key] = val_rich
+
+            # Só adiciona se a linha tiver algum conteúdo
+            if not is_empty:
+                data_plain.append(row_p)
+                data_rich.append(row_r)
+                
+        return data_plain, data_rich
+    
+    def _select_output_folder(self):
+        """Abre diálogo para selecionar pasta de saída."""
+        folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Saída")
+        if folder:
+            self.txt_output_path.setText(folder)

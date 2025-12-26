@@ -70,6 +70,7 @@ class EditorDeTextoPanel(QWidget):
         # 1. Conteúdo
         layout.addWidget(QLabel("Texto:"))
         self.txt_content = QTextEdit()
+        self.txt_content.setStyleSheet("background-color: #FFFFFF; color: #000000;")
         self.txt_content.setMinimumHeight(80)
         self.txt_content.textChanged.connect(lambda: self.htmlChanged.emit(self.txt_content.toHtml()))
         layout.addWidget(self.txt_content)
