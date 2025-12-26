@@ -72,4 +72,5 @@ class TablePanel(QWidget):
 
         self.table = RichTableWidget(0, 0)
         self.table.setAlternatingRowColors(True)
+        self.table.horizontalHeader().setSectionsMovable(True)
         layout.addWidget(self.table, 1)
