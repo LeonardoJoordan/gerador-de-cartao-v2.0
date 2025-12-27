@@ -203,6 +203,13 @@ class MainWindow(QMainWindow):
         else:
             self.log_panel.append("Aviso: template_v3.json não encontrado para este modelo.")
 
+    def _on_editor_saved(self, model_name, placeholders):
+        """Chamado quando o Editor salva um modelo. Recarrega a lista e seleciona o salvo."""
+        self.log_panel.append(f"Modelo '{model_name}' salvo. Atualizando lista...")
+        # Recarrega do disco e força a seleção do novo modelo
+        # A mudança de seleção disparará _on_model_changed, que atualizará a tabela/preview
+        self._reload_models_from_disk(select_name=model_name)
+    
     def _update_table_columns(self, placeholders):
         """Atualiza os cabeçalhos da tabela baseada nos placeholders do modelo."""
         # 1. Limpa tudo (zera colunas e linhas)
@@ -228,7 +235,8 @@ class MainWindow(QMainWindow):
             return
 
         self.editor_window = EditorWindow(self)
-        self.editor_window.modelSaved.connect(self._update_table_columns)
+        # Conecta ao novo callback que lida com o reload
+        self.editor_window.modelSaved.connect(self._on_editor_saved)
 
         from core.template_v2 import slugify_model_name
         slug = slugify_model_name(self.active_model_name)
@@ -287,7 +295,8 @@ class MainWindow(QMainWindow):
     def _on_add_model(self):
         """Adicionar modelo = abrir editor em branco."""
         self.editor_window = EditorWindow(self)
-        self.editor_window.modelSaved.connect(self._update_table_columns)
+        # Conecta ao novo callback que lida com o reload
+        self.editor_window.modelSaved.connect(self._on_editor_saved)
         self.editor_window.show()
 
 

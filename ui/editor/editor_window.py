@@ -15,7 +15,8 @@ from .panels import CaixaDeTextoPanel, EditorDeTextoPanel, AssinaturaPanel
 
 
 class EditorWindow(QMainWindow):
-    modelSaved = Signal(list)
+    # Agora envia: (Nome do Modelo, Lista de Placeholders)
+    modelSaved = Signal(str, list)
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Editor Visual de Modelo (AutoMakeCard)")
@@ -423,8 +424,8 @@ class EditorWindow(QMainWindow):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
             
-        # Avisa aos interessados quais são as variáveis deste modelo
-        self.modelSaved.emit(data["placeholders"])
+        # Avisa aos interessados: (Nome do Modelo, Variáveis)
+        self.modelSaved.emit(model_name, data["placeholders"])
         
         QMessageBox.information(self, "Sucesso", f"Modelo '{model_name}' salvo com sucesso em:\n{file_path}")
 
