@@ -14,9 +14,36 @@ class RichTableWidget(QTableWidget):
     RICH_ROLE = Qt.ItemDataRole.UserRole  # onde guardamos o HTML "rico"
 
     def keyPressEvent(self, event):
+        # 1. Colar (Ctrl+V)
         if event.matches(QKeySequence.StandardKey.Paste):
             self._paste_from_clipboard()
             return
+
+        # 2. Deletar (Delete ou Backspace)
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            # Verifica se há linhas inteiras selecionadas
+            # (Geralmente selecionadas clicando no cabeçalho vertical)
+            sel_rows = self.selectionModel().selectedRows()
+            
+            if sel_rows:
+                # Se tem linhas inteiras selecionadas, remove as linhas
+                # Removemos de trás para frente para não bagunçar os índices
+                rows_to_del = sorted([idx.row() for idx in sel_rows], reverse=True)
+                for r in rows_to_del:
+                    self.removeRow(r)
+                
+                # [SEGURANÇA] Se apagou todas as linhas, cria uma nova em branco
+                # para que o usuário tenha onde clicar/colar
+                if self.rowCount() == 0:
+                    self.insertRow(0)
+            else:
+                # Se não tem linhas inteiras, apenas limpa o conteúdo das células selecionadas
+                for item in self.selectedItems():
+                    item.setText("")
+                    item.setData(self.RICH_ROLE, None) # Limpa também o HTML oculto
+            
+            return
+
         super().keyPressEvent(event)
 
     def _text_width_px(self, text: str) -> int:
