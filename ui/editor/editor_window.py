@@ -3,7 +3,7 @@
 import json
 from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QWidget, 
                                QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, 
-                               QMessageBox, QInputDialog)
+                               QMessageBox, QInputDialog, QListWidget, QAbstractItemView)
 from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction
 from PySide6.QtCore import Qt, Signal
 from pathlib import Path
@@ -67,6 +67,23 @@ class EditorWindow(QMainWindow):
         right_layout.addWidget(grp_guides)
 
         # Separador
+        self._add_separator(right_layout)
+
+        # Grupo: Ordem das Colunas
+        grp_cols = QFrame()
+        ly_cols = QVBoxLayout(grp_cols)
+        ly_cols.setContentsMargins(0, 0, 0, 10)
+        ly_cols.addWidget(QLabel("<b>ORDEM DAS COLUNAS</b>"))
+        ly_cols.addWidget(QLabel("<small>Arraste para ordenar</small>"))
+
+        self.lst_placeholders = QListWidget()
+        self.lst_placeholders.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.lst_placeholders.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.lst_placeholders.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.lst_placeholders.setMaximumHeight(120)
+        ly_cols.addWidget(self.lst_placeholders)
+
+        right_layout.addWidget(grp_cols)
         self._add_separator(right_layout)
 
         # Grupo: Adicionar Elementos
@@ -142,6 +159,28 @@ class EditorWindow(QMainWindow):
         if not self.scene.sceneRect().isEmpty():
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
     
+    def sync_placeholders_list(self):
+        """Sincroniza a QListWidget com os itens da cena, preservando ordem manual."""
+        # 1. O que existe na cena agora?
+        current_vars = set(self.get_all_model_placeholders())
+
+        # 2. O que já está na lista visual?
+        existing_items_map = {} # map: text -> row
+        for i in range(self.lst_placeholders.count()):
+            existing_items_map[self.lst_placeholders.item(i).text()] = i
+
+        # 3. Remover da lista o que não existe mais na cena
+        # (De trás pra frente para não invalidar índices)
+        for i in range(self.lst_placeholders.count() - 1, -1, -1):
+            txt = self.lst_placeholders.item(i).text()
+            if txt not in current_vars:
+                self.lst_placeholders.takeItem(i)
+
+        # 4. Adicionar novos no final (append)
+        for var in sorted(list(current_vars)):
+            if var not in existing_items_map:
+                self.lst_placeholders.addItem(var)
+    
     def _add_separator(self, layout):
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -155,6 +194,7 @@ class EditorWindow(QMainWindow):
             for item in selected: 
                 self.scene.removeItem(item)
             self.on_selection_changed() # Atualiza estado dos painéis
+            self.sync_placeholders_list() # Sincroniza lista lateral
         else:
             super().keyPressEvent(event)
 
@@ -307,12 +347,17 @@ class EditorWindow(QMainWindow):
                     "longest_side": max(pix.width(), pix.height())
                 })
 
+        # Coleta placeholders na ordem visual definida pelo usuário
+        ordered_placeholders = []
+        for i in range(self.lst_placeholders.count()):
+            ordered_placeholders.append(self.lst_placeholders.item(i).text())
+
         # Estrutura Final do Modelo V3
         data = {
             "name": "modelo_v3_projeto",
             "canvas_size": {"w": int(self.scene.width()), "h": int(self.scene.height())},
             "background_path": self.background_path,
-            "placeholders": self.get_all_model_placeholders(),
+            "placeholders": ordered_placeholders,
             "signatures": signatures_data,
             "boxes": boxes_data
         }
@@ -398,11 +443,8 @@ class EditorWindow(QMainWindow):
     def _on_content_updated(self, html):
         # Atualiza o texto na box (já existente)
         self.update_text_html(html)
-        
-        # Detecta novos placeholders e loga no console por enquanto
-        vars_detectadas = self.get_all_model_placeholders()
-        if vars_detectadas:
-            print(f"Variáveis detectadas no modelo: {vars_detectadas}")
+        # Sincroniza lista visual
+        self.sync_placeholders_list()
 
     def load_from_json(self, file_path):
         """Carrega um modelo V3 e reconstrói o canvas."""
@@ -469,6 +511,15 @@ class EditorWindow(QMainWindow):
             
             # Força a atualização da posição do texto dentro da caixa
             box.recalculate_text_position()
+
+            # 5. Restaura Ordem das Colunas (Placeholders)
+            saved_placeholders = data.get("placeholders", [])
+            self.lst_placeholders.clear()
+            # Primeiro adiciona na ordem salva
+            for p in saved_placeholders:
+                self.lst_placeholders.addItem(p)
+            # Depois roda o sync para garantir que nada faltou ou sobrou
+            self.sync_placeholders_list()
             
             # Aplica recuo e entrelinha salvos
             box.set_block_format(
