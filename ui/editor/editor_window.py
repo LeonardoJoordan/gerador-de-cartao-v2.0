@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QWidg
 from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction
 from PySide6.QtCore import Qt, Signal
 from pathlib import Path
+import shutil
 
 # Importa os módulos que acabamos de separar
 from .canvas_items import DesignerBox, Guideline, px_to_mm, SignatureItem
@@ -180,6 +181,33 @@ class EditorWindow(QMainWindow):
         for var in sorted(list(current_vars)):
             if var not in existing_items_map:
                 self.lst_placeholders.addItem(var)
+    
+    def _import_asset(self, source_path: str, model_dir: Path) -> str | None:
+        """Copia o arquivo para a pasta assets/ do modelo e retorna caminho relativo."""
+        if not source_path: 
+            return None
+        
+        src = Path(source_path)
+        if not src.exists():
+            return None
+            
+        # Se já é relativo ou está dentro da pasta assets, assume que está ok
+        # (Isso evita copiar recursivamente se salvar múltiplas vezes)
+        if "assets" in src.parts and model_dir in src.parents:
+            return f"assets/{src.name}"
+
+        assets_dir = model_dir / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        
+        dest = assets_dir / src.name
+        
+        # Copia o arquivo (sobrescreve se existir para garantir atualização)
+        try:
+            shutil.copy2(src, dest)
+            return f"assets/{src.name}"
+        except Exception as e:
+            print(f"Erro ao copiar asset: {e}")
+            return source_path # Fallback para o original
     
     def _add_separator(self, layout):
         sep = QFrame()
@@ -374,6 +402,20 @@ class EditorWindow(QMainWindow):
         model_dir = Path("models") / slug
         model_dir.mkdir(parents=True, exist_ok=True)
         
+        # --- Lógica de Assets (Portabilidade) ---
+        # 1. Processa Background
+        if self.background_path:
+            rel_bg = self._import_asset(self.background_path, model_dir)
+            data["background_path"] = rel_bg
+
+        # 2. Processa Assinaturas
+        for sig in data["signatures"]:
+            # O item guarda o path original em "path", precisamos atualizá-lo no JSON
+            rel_sig = self._import_asset(sig["path"], model_dir)
+            if rel_sig:
+                sig["path"] = rel_sig
+        # ----------------------------------------
+
         file_path = model_dir / "template_v3.json"
         
         # 2. Salva o JSON
@@ -472,15 +514,22 @@ class EditorWindow(QMainWindow):
 
         # 2. Restaura o Fundo
         if data.get("background_path"):
-            bg_path = data["background_path"]
-            if Path(bg_path).exists():
-                self.load_background_image(bg_path)
+            bg_path_raw = data["background_path"]
+            # Resolve caminho relativo vs absoluto
+            bg_path = path.parent / bg_path_raw if not Path(bg_path_raw).is_absolute() else Path(bg_path_raw)
+            
+            if bg_path.exists():
+                self.load_background_image(str(bg_path))
 
         # 3. Restaura as Assinaturas
         from .canvas_items import SignatureItem
         for sig_data in data.get("signatures", []):
-            if Path(sig_data["path"]).exists():
-                sig = SignatureItem(sig_data["path"])
+            raw_path = sig_data["path"]
+            # Resolve caminho relativo
+            sig_path = path.parent / raw_path if not Path(raw_path).is_absolute() else Path(raw_path)
+
+            if sig_path.exists():
+                sig = SignatureItem(str(sig_path))
                 sig.setPos(sig_data["x"], sig_data["y"])
                 sig.resize_by_longest_side(sig_data["longest_side"])
                 self.scene.addItem(sig)

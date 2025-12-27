@@ -120,6 +120,15 @@ class MainWindow(QMainWindow):
         with open(template_path, "r", encoding="utf-8") as f:
             tpl_data = json.load(f)
 
+        # [FIX] Resolve caminhos relativos para absolutos antes de renderizar
+        model_dir = template_path.parent
+        if tpl_data.get("background_path") and not Path(tpl_data["background_path"]).is_absolute():
+            tpl_data["background_path"] = str(model_dir / tpl_data["background_path"])
+        
+        for sig in tpl_data.get("signatures", []):
+            if not Path(sig["path"]).is_absolute():
+                sig["path"] = str(model_dir / sig["path"])
+
         # 3. Prepara o motor e diretório de saída
         renderer = NativeRenderer(tpl_data)
         
@@ -163,6 +172,15 @@ class MainWindow(QMainWindow):
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    
+                    # [FIX] Resolve assets relativos para o preview
+                    model_dir = json_path.parent
+                    if data.get("background_path") and not Path(data["background_path"]).is_absolute():
+                        data["background_path"] = str(model_dir / data["background_path"])
+                    for sig in data.get("signatures", []):
+                        if not Path(sig["path"]).is_absolute():
+                            sig["path"] = str(model_dir / sig["path"])
+
                     placeholders = data.get("placeholders", [])
                     
                     # Atualiza a tabela (headers)
