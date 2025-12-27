@@ -2,7 +2,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                 QSplitter, QPushButton, QApplication, QMessageBox,
                                   QAbstractItemView, QLineEdit, QLabel, QFileDialog)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 
 from ui.preview_panel import PreviewPanel
 from ui.controls_panel import ControlsPanel
@@ -95,6 +95,12 @@ class MainWindow(QMainWindow):
         self.controls_panel.btn_remove_model.clicked.connect(self._on_remove_model)
         self.controls_panel.btn_config_model.clicked.connect(self._open_model_dialog)
 
+        # --- Configurações Persistentes ---
+        self.settings = QSettings("AutoMakeCard", "MainApp")
+        last_output = self.settings.value("last_output_dir", "")
+        if last_output:
+            self.txt_output_path.setText(str(last_output))
+
     def _generate_cards_placeholder(self):
         # 1. Coleta dados frescos da tabela
         rows_plain, rows_rich = self._scrape_table_data()
@@ -136,6 +142,8 @@ class MainWindow(QMainWindow):
         custom_path = self.txt_output_path.text().strip()
         if custom_path:
             output_dir = Path(custom_path)
+            # Memoriza o caminho digitado manualmente
+            self.settings.setValue("last_output_dir", custom_path)
         else:
             output_dir = Path("output") / slug
             
@@ -385,6 +393,10 @@ class MainWindow(QMainWindow):
     
     def _select_output_folder(self):
         """Abre diálogo para selecionar pasta de saída."""
-        folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Saída")
+        # Tenta abrir o diálogo já na última pasta usada
+        start_dir = self.txt_output_path.text() or ""
+        folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Saída", start_dir)
+        
         if folder:
             self.txt_output_path.setText(folder)
+            self.settings.setValue("last_output_dir", folder)
