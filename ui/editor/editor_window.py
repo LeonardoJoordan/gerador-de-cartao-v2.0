@@ -157,9 +157,14 @@ class EditorWindow(QMainWindow):
         self._zoom_to_fit()
 
     def _zoom_to_fit(self):
-        """Ajusta o zoom para que a cena inteira caiba na visualização."""
+        """Ajusta o zoom para que a cena inteira caiba na visualização, com margem."""
         if not self.scene.sceneRect().isEmpty():
-            self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            # Adiciona 50px de margem visual ao redor da área da cena
+            # Isso faz o fit considerar uma área maior, deixando a imagem 'descolada' das bordas
+            margin = 50
+            view_rect = self.scene.sceneRect().adjusted(-margin, -margin, margin, margin)
+            
+            self.view.fitInView(view_rect, Qt.AspectRatioMode.KeepAspectRatio)
     
     def sync_placeholders_list(self):
         """Sincroniza a QListWidget com os itens da cena, preservando ordem manual."""
@@ -218,18 +223,42 @@ class EditorWindow(QMainWindow):
 
     # --- Lógica da Cena ---
     def keyPressEvent(self, event):
+        # 1. Deletar itens
         if event.key() == Qt.Key.Key_Delete:
             selected = self.scene.selectedItems()
             for item in selected: 
                 self.scene.removeItem(item)
             self.on_selection_changed() # Atualiza estado dos painéis
             self.sync_placeholders_list() # Sincroniza lista lateral
+
+        # 2. Mover itens (Setas)
+        elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            step = 1
+            # Se quiser turbo no futuro: if event.modifiers() & Qt.KeyboardModifier.ShiftModifier: step = 10
+            
+            dx, dy = 0, 0
+            if event.key() == Qt.Key.Key_Left: dx = -step
+            elif event.key() == Qt.Key.Key_Right: dx = step
+            elif event.key() == Qt.Key.Key_Up: dy = -step
+            elif event.key() == Qt.Key.Key_Down: dy = step
+            
+            for item in self.scene.selectedItems():
+                item.moveBy(dx, dy)
+
         else:
             super().keyPressEvent(event)
 
     def add_guide(self, vertical):
-        # Adiciona no meio da tela visível (aprox)
-        pos = 500 
+        # Calcula o centro exato do documento atual
+        rect = self.scene.sceneRect()
+        
+        if vertical:
+            # Guia Vertical: Fica no meio da Largura (X)
+            pos = rect.width() / 2
+        else:
+            # Guia Horizontal: Fica no meio da Altura (Y)
+            pos = rect.height() / 2
+
         self.scene.addItem(Guideline(pos, is_vertical=vertical))
 
     def add_new_box(self):

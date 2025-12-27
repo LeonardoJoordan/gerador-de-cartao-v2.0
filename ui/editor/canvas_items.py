@@ -2,7 +2,8 @@
 from PySide6.QtWidgets import (QGraphicsLineItem, QGraphicsRectItem, QGraphicsTextItem, 
                                QGraphicsItem, QInputDialog, QLineEdit, QGraphicsPixmapItem)
 from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QPen, QBrush, QColor, QFont, QTextCursor, QTextBlockFormat, QPixmap
+from PySide6.QtGui import (QPen, QBrush, QColor, QFont, QTextCursor, 
+                           QTextBlockFormat, QPixmap, QPainterPath, QPainterPathStroker)
 import re
 
 
@@ -37,6 +38,18 @@ class Guideline(QGraphicsLineItem):
                       QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setZValue(10)
 
+    def shape(self):
+        """Define uma área de clique (hitbox) mais grossa que a linha visual."""
+        # Pega o caminho original (a linha fina)
+        path = super().shape()
+        
+        # Cria um 'engrossador' de caminho
+        stroker = QPainterPathStroker()
+        stroker.setWidth(10) # 10px de largura total (clique fácil)
+        
+        # Retorna o caminho engrossado
+        return stroker.createStroke(path)
+    
     def mouseDoubleClickEvent(self, event):
         rect = self.scene().sceneRect()
         
@@ -85,12 +98,34 @@ class Guideline(QGraphicsLineItem):
         super().mouseDoubleClickEvent(event)
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            curr_pos = value
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
+            new_pos = value
+            rect = self.scene().sceneRect()
+            snap_dist = 15 # Distância de atração em pixels
+            
             if self.is_vertical:
-                return QPointF(curr_pos.x(), 0)
+                x = new_pos.x()
+                # Candidatos: Esquerda (0), Centro (W/2), Direita (W)
+                candidates = [0, rect.width() / 2, rect.width()]
+                
+                for c in candidates:
+                    if abs(x - c) < snap_dist:
+                        x = c
+                        break # Encontrou um ponto próximo, "gruda" nele
+                
+                return QPointF(x, 0)
             else:
-                return QPointF(0, curr_pos.y())
+                y = new_pos.y()
+                # Candidatos: Topo (0), Meio (H/2), Base (H)
+                candidates = [0, rect.height() / 2, rect.height()]
+                
+                for c in candidates:
+                    if abs(y - c) < snap_dist:
+                        y = c
+                        break
+                
+                return QPointF(0, y)
+                
         return super().itemChange(change, value)
 
 
