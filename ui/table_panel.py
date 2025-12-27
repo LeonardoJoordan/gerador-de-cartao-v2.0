@@ -21,41 +21,76 @@ class RichTableWidget(QTableWidget):
 
     def _paste_from_clipboard(self):
         md = QApplication.clipboard().mimeData()
-
-        if md and md.hasHtml():
-            grid = parse_clipboard_html_table(md.html())
-        else:
-            grid = parse_tsv(md.text() if md else "")
-
-        if not grid:
+        if not md:
             return
 
-        start = self.currentIndex()
-        start_row = start.row() if start.isValid() else 0
-        start_col = start.column() if start.isValid() else 0
+        # 1. Parse dos dados (TSV é a fonte da verdade estrutural)
+        text_raw = md.text() if md.hasText() else ""
+        grid_struct = parse_tsv(text_raw)
+        
+        # Parse do HTML para estilo (negrito/itálico)
+        grid_style = []
+        if md.hasHtml():
+            try:
+                grid_style = parse_clipboard_html_table(md.html())
+            except Exception:
+                grid_style = []
 
-        for r, row in enumerate(grid):
-            # Se a colagem vai exceder o número de linhas, cria novas linhas
-            if (start_row + r) >= self.rowCount():
-                self.setRowCount(start_row + r + 1)
+        if not grid_struct:
+            return
 
-            for c, cell in enumerate(row):
-                rr = start_row + r
-                cc = start_col + c
+        # 2. Identifica onde o usuário clicou (Célula e Coluna Visual)
+        curr = self.currentIndex()
+        if not curr.isValid():
+            start_row = 0
+            start_col_logical = 0
+        else:
+            start_row = curr.row()
+            start_col_logical = curr.column()
+
+        # Obtém o cabeçalho para traduzir Visual <-> Lógico
+        header = self.horizontalHeader()
+        start_visual_col = header.visualIndex(start_col_logical)
+
+        # 3. Expande linhas se necessário
+        required_rows = start_row + len(grid_struct)
+        if required_rows > self.rowCount():
+            self.setRowCount(required_rows)
+
+        # 4. Loop de Colagem Inteligente
+        for r, row_data in enumerate(grid_struct):
+            # Linha real na tabela
+            dest_row = start_row + r
+            
+            # Linha de estilo correspondente (se houver)
+            style_row = grid_style[r] if r < len(grid_style) else []
+
+            for c, cell_plain in enumerate(row_data):
+                # A mágica: Calculamos a coluna VISUAL de destino
+                target_visual_col = start_visual_col + c
                 
-                # Ignora apenas se exceder COLUNAS (pois colunas são fixas do modelo)
-                if cc >= self.columnCount():
-                    continue
+                # Se exceder o número de colunas visíveis, paramos de colar nesta linha
+                if target_visual_col >= self.columnCount():
+                    break
+                
+                # Traduzimos de volta para o índice LÓGICO (onde o dado fica guardado)
+                dest_col_logical = header.logicalIndex(target_visual_col)
 
-                item = self.item(rr, cc)
+                item = self.item(dest_row, dest_col_logical)
                 if item is None:
                     item = QTableWidgetItem()
-                    self.setItem(rr, cc, item)
+                    self.setItem(dest_row, dest_col_logical, item)
 
-                # Visível: texto simples
-                item.setText(cell.plain)
-                # Interno: HTML "rico"
-                item.setData(self.RICH_ROLE, cell.rich_html)
+                # Aplica Texto
+                txt_val = cell_plain.plain
+                item.setText(txt_val)
+
+                # Aplica Estilo (se disponível na posição correta)
+                if c < len(style_row):
+                    rich_val = style_row[c].rich_html
+                    item.setData(self.RICH_ROLE, rich_val)
+                else:
+                    item.setData(self.RICH_ROLE, txt_val)
 
 
 class TablePanel(QWidget):
