@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QApplication
-from PySide6.QtGui import QKeySequence
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QFontMetrics
+from PySide6.QtCore import Qt, QTimer
 
 from core.rich_clipboard import parse_clipboard_html_table, parse_tsv
 
@@ -18,6 +18,44 @@ class RichTableWidget(QTableWidget):
             self._paste_from_clipboard()
             return
         super().keyPressEvent(event)
+
+    def _text_width_px(self, text: str) -> int:
+        """Mede largura (px) do texto considerando a fonte atual do widget."""
+        fm = QFontMetrics(self.font())
+        # o texto pode vir com quebras de linha (Sheets/TSV). Usa a maior linha.
+        lines = (text or "").splitlines() or [""]
+        return max(fm.horizontalAdvance(line) for line in lines)
+
+    def _autofit_columns_after_paste(self, cols_logical: set[int], row_start: int, row_end: int, padding_px: int = 20):
+        """
+        Ajusta largura só das colunas afetadas, baseado no maior conteúdo
+        colado (e também no texto do header), com padding extra.
+        """
+        header = self.horizontalHeader()
+
+        for col in cols_logical:
+            # Começa pelo texto do header (se existir)
+            header_item = self.horizontalHeaderItem(col)
+            best = self._text_width_px(header_item.text() if header_item else "")
+
+            # Mede apenas o intervalo de linhas coladas (bem mais leve)
+            for r in range(row_start, row_end + 1):
+                it = self.item(r, col)
+                if it is None:
+                    continue
+                w = self._text_width_px(it.text())
+                if w > best:
+                    best = w
+
+            desired = best + padding_px
+
+            # Pequena folga extra se a coluna tiver ícone/indicador etc (opcional)
+            # desired += 6
+
+            # Só aumenta (não encolhe) para evitar “piscadas”
+            if desired > self.columnWidth(col):
+                self.setColumnWidth(col, desired)
+
 
     def _paste_from_clipboard(self):
         md = QApplication.clipboard().mimeData()
@@ -57,23 +95,20 @@ class RichTableWidget(QTableWidget):
         if required_rows > self.rowCount():
             self.setRowCount(required_rows)
 
+        # >>> NOVO: rastrear o que foi afetado
+        affected_cols_logical = set()
+        row_end = start_row + len(grid_struct) - 1
+
         # 4. Loop de Colagem Inteligente
         for r, row_data in enumerate(grid_struct):
-            # Linha real na tabela
             dest_row = start_row + r
-            
-            # Linha de estilo correspondente (se houver)
             style_row = grid_style[r] if r < len(grid_style) else []
 
             for c, cell_plain in enumerate(row_data):
-                # A mágica: Calculamos a coluna VISUAL de destino
                 target_visual_col = start_visual_col + c
-                
-                # Se exceder o número de colunas visíveis, paramos de colar nesta linha
                 if target_visual_col >= self.columnCount():
                     break
-                
-                # Traduzimos de volta para o índice LÓGICO (onde o dado fica guardado)
+
                 dest_col_logical = header.logicalIndex(target_visual_col)
 
                 item = self.item(dest_row, dest_col_logical)
@@ -81,16 +116,27 @@ class RichTableWidget(QTableWidget):
                     item = QTableWidgetItem()
                     self.setItem(dest_row, dest_col_logical, item)
 
-                # Aplica Texto
                 txt_val = cell_plain.plain
                 item.setText(txt_val)
 
-                # Aplica Estilo (se disponível na posição correta)
                 if c < len(style_row):
                     rich_val = style_row[c].rich_html
                     item.setData(self.RICH_ROLE, rich_val)
                 else:
                     item.setData(self.RICH_ROLE, txt_val)
+
+                # >>> NOVO
+                affected_cols_logical.add(dest_col_logical)
+
+        # >>> NOVO: auto-fit depois da colagem (padding 20px = 10px cada lado)
+        if affected_cols_logical:
+            QTimer.singleShot(
+                0,
+                lambda: self._autofit_columns_after_paste(
+                    affected_cols_logical, start_row, row_end, padding_px=20
+                )
+            )
+
 
 
 class TablePanel(QWidget):
