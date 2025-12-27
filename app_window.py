@@ -84,11 +84,16 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
 
+        self.cached_model_data = None # Cache para o Live Preview
+        
         self.active_model_name = self.preview_panel.cbo_models.currentText()
         self._on_model_changed(self.active_model_name)
 
         # quando trocar o modelo no combo, atualiza estado
         self.preview_panel.cbo_models.currentTextChanged.connect(self._on_model_changed)
+        
+        # Conecta a seleção da tabela ao Live Preview
+        self.table_panel.table.itemSelectionChanged.connect(self._on_table_selection)
 
         # botões novos
         self.controls_panel.btn_add_model.clicked.connect(self._on_add_model)
@@ -194,9 +199,13 @@ class MainWindow(QMainWindow):
                     # Atualiza a tabela (headers)
                     self._update_table_columns(placeholders)
                     self.log_panel.append(f"Colunas carregadas: {placeholders}")
+                    
+                    # Salva no cache para o Live Preview usar sem ler disco
+                    self.cached_model_data = data
+                    
                     try:
                         renderer = NativeRenderer(data)
-                        # Gera o pixmap em memória (com placeholders preenchidos ex: {nome})
+                        # Gera o pixmap padrão (com nomes das variáveis) para quando não houver seleção
                         preview_pix = renderer.render_to_pixmap(row_rich=None)
                         self.preview_panel.set_preview_pixmap(preview_pix)
                         self.log_panel.append("Preview gerado com sucesso (incluindo camadas de texto)")
@@ -345,6 +354,48 @@ class MainWindow(QMainWindow):
         self.log_panel.append(f"Modelo excluído: {model_name}")
         self._reload_models_from_disk()
 
+    def _get_row_data_rich(self, row_idx):
+        """Extrai os dados (Rich Text) de uma única linha para o Live Preview."""
+        table = self.table_panel.table
+        cols = table.columnCount()
+        headers = [table.horizontalHeaderItem(c).text() for c in range(cols)]
+        
+        row_data = {}
+        for c in range(cols):
+            key = headers[c]
+            item = table.item(row_idx, c)
+            
+            # Pega o Rich Text (UserRole) ou o texto puro se não houver
+            val = ""
+            if item:
+                val = item.data(Qt.ItemDataRole.UserRole)
+                if not val:
+                    val = item.text()
+            
+            row_data[key] = val
+        return row_data
+
+    def _on_table_selection(self):
+        """Chamado quando o usuário clica na tabela. Gera preview em tempo real."""
+        if not self.cached_model_data:
+            return
+
+        # Pega a linha atual (onde está o foco)
+        row = self.table_panel.table.currentRow()
+        if row < 0:
+            return
+
+        # Extrai dados e renderiza
+        try:
+            row_rich = self._get_row_data_rich(row)
+            renderer = NativeRenderer(self.cached_model_data)
+            
+            # Gera imagem usando os dados da linha
+            pix = renderer.render_to_pixmap(row_rich=row_rich)
+            self.preview_panel.set_preview_pixmap(pix)
+        except Exception as e:
+            print(f"Erro no Live Preview: {e}")
+    
     def _scrape_table_data(self):
         """Varre a QTableWidget e monta as listas de dados para o renderizador."""
         table = self.table_panel.table
