@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QWidg
                                QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, 
                                QMessageBox, QInputDialog, QListWidget, QAbstractItemView)
 from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QEvent
 from pathlib import Path
 import shutil
 
@@ -35,6 +35,8 @@ class EditorWindow(QMainWindow):
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setBackgroundBrush(QBrush(QColor("#e0e0e0")))
         self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        # Captura teclas pressionadas quando o foco está na view (setas, delete)
+        self.view.installEventFilter(self)
         
         # Referências para o fundo (Imagem ou Fallback branco)
         self.bg_item = None  # Armazenará o QGraphicsPixmapItem da imagem
@@ -221,32 +223,40 @@ class EditorWindow(QMainWindow):
         sep.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(sep)
 
-    # --- Lógica da Cena ---
-    def keyPressEvent(self, event):
-        # 1. Deletar itens
-        if event.key() == Qt.Key.Key_Delete:
-            selected = self.scene.selectedItems()
-            for item in selected: 
-                self.scene.removeItem(item)
-            self.on_selection_changed() # Atualiza estado dos painéis
-            self.sync_placeholders_list() # Sincroniza lista lateral
-
-        # 2. Mover itens (Setas)
-        elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
-            step = 1
-            # Se quiser turbo no futuro: if event.modifiers() & Qt.KeyboardModifier.ShiftModifier: step = 10
+    # --- Lógica de Eventos (Filtro) ---
+    def eventFilter(self, source, event):
+        if source == self.view and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
             
-            dx, dy = 0, 0
-            if event.key() == Qt.Key.Key_Left: dx = -step
-            elif event.key() == Qt.Key.Key_Right: dx = step
-            elif event.key() == Qt.Key.Key_Up: dy = -step
-            elif event.key() == Qt.Key.Key_Down: dy = step
+            # 1. Deletar itens
+            if key == Qt.Key.Key_Delete:
+                selected = self.scene.selectedItems()
+                for item in selected: 
+                    self.scene.removeItem(item)
+                self.on_selection_changed()
+                self.sync_placeholders_list()
+                return True # Evento consumido
             
-            for item in self.scene.selectedItems():
-                item.moveBy(dx, dy)
-
-        else:
-            super().keyPressEvent(event)
+            # 2. Mover itens (Setas)
+            elif key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+                step = 1
+                # Se segurar Shift, move mais rápido (opcional, mas útil)
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    step = 10
+                
+                dx, dy = 0, 0
+                if key == Qt.Key.Key_Left: dx = -step
+                elif key == Qt.Key.Key_Right: dx = step
+                elif key == Qt.Key.Key_Up: dy = -step
+                elif key == Qt.Key.Key_Down: dy = step
+                
+                sel_items = self.scene.selectedItems()
+                if sel_items:
+                    for item in sel_items:
+                        item.moveBy(dx, dy)
+                    return True # Evento consumido (evita scroll da tela)
+        
+        return super().eventFilter(source, event)
 
     def add_guide(self, vertical):
         # Calcula o centro exato do documento atual
