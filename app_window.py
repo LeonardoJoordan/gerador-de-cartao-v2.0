@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                   QLineEdit, QLabel, QFileDialog, QProgressBar,
                                   QInputDialog) # <--- Certifique-se que QInputDialog está aqui
 from PySide6.QtCore import Qt, QSettings
-from PySide6.QtGui import QPainter, QImage
+from PySide6.QtGui import QPainter, QImage, QPageLayout
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from ui.preview_panel import PreviewPanel
 from ui.controls_panel import ControlsPanel
@@ -575,6 +575,19 @@ class MainWindow(QMainWindow):
 
         # 3. Configura a Impressora (Diálogo do Sistema)
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        
+        # [CORREÇÃO] Auto-detectar orientação baseada na primeira folha gerada
+        # Isso impede que uma folha Paisagem seja "espremida" numa impressão Retrato
+        if files_to_print:
+            first_img_path = self.manager.output_dir / files_to_print[0]
+            if first_img_path.exists():
+                img_check = QImage(str(first_img_path))
+                if not img_check.isNull():
+                    if img_check.width() > img_check.height():
+                        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+                    else:
+                        printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+
         dialog = QPrintDialog(printer, self)
         
         if dialog.exec() != QPrintDialog.DialogCode.Accepted:
