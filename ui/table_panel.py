@@ -3,9 +3,16 @@ from PySide6.QtGui import QKeySequence, QFontMetrics
 from PySide6.QtCore import Qt, QTimer
 
 from core.rich_clipboard import parse_clipboard_html_table, parse_tsv
+from PySide6.QtWidgets import QMenu
+from PySide6.QtGui import QAction
+from .delegates import HTMLDelegate
 
 
 class RichTableWidget(QTableWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Ativa o renderizador HTML personalizado
+        self.setItemDelegate(HTMLDelegate(self))
     """
     QTableWidget que intercepta Ctrl+V.
     - Se clipboard tiver HTML (Sheets): preserva <b>/<i>/<u>/<br> em Qt.UserRole
@@ -14,6 +21,18 @@ class RichTableWidget(QTableWidget):
     RICH_ROLE = Qt.ItemDataRole.UserRole  # onde guardamos o HTML "rico"
 
     def keyPressEvent(self, event):
+        # --- ATALHOS DE FORMATAÇÃO ---
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            key = event.key()
+            if key == Qt.Key.Key_B:
+                self._toggle_format("b")
+                return
+            elif key == Qt.Key.Key_I:
+                self._toggle_format("i")
+                return
+            elif key == Qt.Key.Key_U:
+                self._toggle_format("u")
+                return
         # 1. Colar (Ctrl+V)
         if event.matches(QKeySequence.StandardKey.Paste):
             self._paste_from_clipboard()
@@ -45,6 +64,70 @@ class RichTableWidget(QTableWidget):
             return
 
         super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        """Cria menu de contexto com opções de formatação."""
+        menu = QMenu(self)
+        
+        # Ações
+        act_bold = QAction("Negrito (Ctrl+B)", self)
+        act_bold.triggered.connect(lambda: self._toggle_format("b"))
+        
+        act_italic = QAction("Itálico (Ctrl+I)", self)
+        act_italic.triggered.connect(lambda: self._toggle_format("i"))
+        
+        act_underline = QAction("Sublinhado (Ctrl+U)", self)
+        act_underline.triggered.connect(lambda: self._toggle_format("u"))
+
+        # Remove formatação (limpa tags mantendo texto)
+        act_clear = QAction("Limpar Formatação", self)
+        act_clear.triggered.connect(self._clear_formatting)
+
+        menu.addActions([act_bold, act_italic, act_underline])
+        menu.addSeparator()
+        menu.addAction(act_clear)
+        
+        menu.exec(event.globalPos())
+
+    def _toggle_format(self, tag: str):
+        """Aplica ou remove uma tag HTML (b, i, u) nas células selecionadas."""
+        items = self.selectedItems()
+        if not items:
+            return
+
+        start_tag = f"<{tag}>"
+        end_tag = f"</{tag}>"
+
+        for item in items:
+            # Pega o HTML atual (UserRole) ou o texto puro se não houver HTML
+            current_html = item.data(self.RICH_ROLE)
+            if not current_html:
+                current_html = item.text()
+
+            # Normaliza para verificação
+            check = current_html.strip()
+
+            # Lógica Toggle "Celular":
+            # Se a célula INTEIRA já estiver envelopada na tag, remove.
+            # Caso contrário (parcialmente ou nada), envelopa tudo.
+            if check.startswith(start_tag) and check.endswith(end_tag):
+                # Remove as tags das pontas
+                new_html = check[len(start_tag):-len(end_tag)]
+            else:
+                # Adiciona as tags
+                new_html = f"{start_tag}{check}{end_tag}"
+
+            item.setData(self.RICH_ROLE, new_html)
+        
+        # Força repintura
+        self.viewport().update()
+
+    def _clear_formatting(self):
+        """Reseta a célula para texto puro."""
+        for item in self.selectedItems():
+            text = item.text() # Texto puro original
+            item.setData(self.RICH_ROLE, None) # Remove HTML
+            item.setText(text) # Garante sincronia
 
     def _text_width_px(self, text: str) -> int:
         """Mede largura (px) do texto considerando a fonte atual do widget."""
