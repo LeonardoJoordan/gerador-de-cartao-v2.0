@@ -11,9 +11,10 @@ from ui.log_panel import LogPanel
 from ui.table_panel import TablePanel
 from core.renderer_v3 import NativeRenderer
 from ui.editor.editor_window import EditorWindow
-# [MUDANÇA] Importamos o Gerente
-from core.worker import RenderManager  
+from core.worker import RenderManager
 from core.template_v2 import slugify_model_name
+# [NOVO] Importação do Diálogo
+from ui.naming_dialog import NamingDialog
 import json
 
 class MainWindow(QMainWindow):
@@ -31,8 +32,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(splitter)
 
-        self.current_output_pattern = "cartao_{nome}"
-        self.manager = None # [MUDANÇA] Renomeado de worker para manager
+        # [MUDANÇA] Guarda apenas o sufixo customizado (o prefixo vem do modelo)
+        self.current_filename_suffix = "" 
+        self.manager = None 
 
         # --- Painel ESQUERDO ---
         left = QWidget()
@@ -69,10 +71,11 @@ class MainWindow(QMainWindow):
         """)
         left_stack.addWidget(self.progress_bar, 0)
 
-        # --- Seletor de Pasta ---
+        # --- Seletor de Pasta e Configuração de Nome ---
         grp_out = QWidget()
         ly_out = QHBoxLayout(grp_out)
         ly_out.setContentsMargins(0, 0, 0, 0)
+        ly_out.setSpacing(5)
 
         ly_out.addWidget(QLabel("Saída:"))
         
@@ -80,10 +83,19 @@ class MainWindow(QMainWindow):
         self.txt_output_path.setPlaceholderText("Padrão: ./output/nome_do_modelo")
         ly_out.addWidget(self.txt_output_path)
 
+        # Botão Pasta
         self.btn_sel_out = QPushButton("...")
         self.btn_sel_out.setFixedWidth(40)
+        self.btn_sel_out.setToolTip("Selecionar pasta de destino")
         self.btn_sel_out.clicked.connect(self._select_output_folder)
         ly_out.addWidget(self.btn_sel_out)
+
+        # [NOVO] Botão Engrenagem (Configurar Nomenclatura)
+        self.btn_config_name = QPushButton("⚙️")
+        self.btn_config_name.setFixedWidth(40)
+        self.btn_config_name.setToolTip("Configurar padrão de nome dos arquivos")
+        self.btn_config_name.clicked.connect(self._open_naming_dialog)
+        ly_out.addWidget(self.btn_config_name)
 
         left_stack.addWidget(grp_out, 0)
 
@@ -118,15 +130,34 @@ class MainWindow(QMainWindow):
         if last_output:
             self.txt_output_path.setText(str(last_output))
 
+    def _open_naming_dialog(self):
+        """Abre o diálogo para configurar o sufixo do nome do arquivo."""
+        if not self.active_model_name:
+            QMessageBox.warning(self, "Atenção", "Selecione um modelo primeiro.")
+            return
+
+        # Coleta variáveis da tabela (cabeçalhos)
+        cols = self.table_panel.table.columnCount()
+        vars_available = [self.table_panel.table.horizontalHeaderItem(c).text() for c in range(cols)]
+        
+        slug = slugify_model_name(self.active_model_name)
+        
+        dlg = NamingDialog(self, slug, vars_available, self.current_filename_suffix)
+        if dlg.exec():
+            self.current_filename_suffix = dlg.get_pattern()
+            
+            # Feedback no log
+            if self.current_filename_suffix:
+                self.log_panel.append(f"Padrão de nome alterado: {slug}_{self.current_filename_suffix}.png")
+            else:
+                self.log_panel.append(f"Padrão de nome: Sequencial ({slug}_01.png)")
+
     def _generate_cards_async(self):
-        """Inicia o processo em background via Manager."""
-        # 1. Scrape dos dados
         rows_plain, rows_rich = self._scrape_table_data()
         if not rows_plain:
             self.log_panel.append("AVISO: A tabela está vazia. Nada a gerar.")
             return
 
-        # 2. Caminho do Modelo
         slug = slugify_model_name(self.active_model_name)
         template_path = Path("models") / slug / "template_v3.json"
 
@@ -134,10 +165,8 @@ class MainWindow(QMainWindow):
             self.log_panel.append(f"ERRO: Modelo '{self.active_model_name}' não encontrado.")
             return
 
-        # 3. Carrega Template e Renderer
         with open(template_path, "r", encoding="utf-8") as f:
             tpl_data = json.load(f)
-            # Resolve caminhos absolutos
             model_dir = template_path.parent
             if tpl_data.get("background_path") and not Path(tpl_data["background_path"]).is_absolute():
                 tpl_data["background_path"] = str(model_dir / tpl_data["background_path"])
@@ -147,7 +176,6 @@ class MainWindow(QMainWindow):
 
         renderer = NativeRenderer(tpl_data)
 
-        # 4. Define Output
         custom_path = self.txt_output_path.text().strip()
         if custom_path:
             output_dir = Path(custom_path)
@@ -156,14 +184,20 @@ class MainWindow(QMainWindow):
             output_dir = Path("output") / slug
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 5. UI Update
         self.btn_generate_cards.setEnabled(False)
         self.btn_generate_cards.setText("Gerando... (Aguarde)")
         self.progress_bar.setValue(0)
         self.log_panel.append(f"--- Iniciando lote de {len(rows_plain)} cartões ---")
 
-        # 6. Inicia o Manager [MUDANÇA PRINCIPAL]
-        self.manager = RenderManager(renderer, rows_plain, rows_rich, output_dir, self.current_output_pattern)
+        # [LÓGICA DE NOMECLATURA]
+        # Se usuário definiu sufixo: modelo_{sufixo}
+        # Se não: modelo (e o sistema adiciona _01, _02...)
+        if self.current_filename_suffix:
+            full_pattern = f"{slug}_{self.current_filename_suffix}"
+        else:
+            full_pattern = slug
+
+        self.manager = RenderManager(renderer, rows_plain, rows_rich, output_dir, full_pattern)
         
         self.manager.progress_updated.connect(self.progress_bar.setValue)
         self.manager.log_updated.connect(self.log_panel.append)
@@ -173,17 +207,19 @@ class MainWindow(QMainWindow):
         self.manager.start()
 
     def _on_generation_finished(self):
-        """Chamado quando TODOS os cartões terminarem."""
         self.btn_generate_cards.setEnabled(True)
         self.btn_generate_cards.setText("Gerar cartões")
         self.log_panel.append("=== Processo Multi-Thread Finalizado ===")
-        # self.progress_bar.setValue(0) # Opcional: resetar barra
 
-    # --- Restante dos métodos inalterados ---
+    # --- Métodos Auxiliares Mantidos ---
     def _on_model_changed(self, name: str):
         self.preview_panel.set_preview_text(f"Prévia do modelo selecionado:\n{name}")
         self.log_panel.append(f"Modelo ativo: {name}")
         self.active_model_name = name
+        
+        # [NOVO] Reseta o padrão de nome customizado ao trocar de modelo
+        # para evitar usar variáveis que não existem no novo modelo
+        self.current_filename_suffix = ""
 
         if not name: return
 
