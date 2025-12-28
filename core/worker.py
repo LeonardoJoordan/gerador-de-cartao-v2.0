@@ -138,11 +138,13 @@ class RenderManager(QObject):
         self.workers = []
         self.total_cards = len(rows_plain)
         self.cards_done = 0
+        self.generated_files = [] # Lista para guardar os caminhos dos arquivos gerados
         self._is_running = False
 
     def start(self):
         self._is_running = True
         self.cards_done = 0
+        self.generated_files = []
         self.workers = []
         
         self.log_updated.emit("📋 Planejando produção...")
@@ -246,12 +248,14 @@ class RenderManager(QObject):
         if not self._is_running: return
         self.cards_done += num_cards
         self.log_updated.emit(msg)
+        self.generated_files.append(filename)
         self._update_progress()
 
     def _on_direct_card_finished(self, filename):
         if not self._is_running: return
         self.cards_done += 1
         self.log_updated.emit(f"[{self.cards_done}/{self.total_cards}] Salvo: {filename}")
+        self.generated_files.append(filename)
         self._update_progress()
 
     def _update_progress(self):

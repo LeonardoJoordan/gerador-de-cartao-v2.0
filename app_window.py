@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                   QLineEdit, QLabel, QFileDialog, QProgressBar,
                                   QInputDialog) # <--- Certifique-se que QInputDialog está aqui
 from PySide6.QtCore import Qt, QSettings
-
+from PySide6.QtGui import QPainter, QImage
+from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from ui.preview_panel import PreviewPanel
 from ui.controls_panel import ControlsPanel
 from ui.log_panel import LogPanel
@@ -342,6 +343,7 @@ class MainWindow(QMainWindow):
         self.manager.log_updated.connect(self.log_panel.append)
         self.manager.error_occurred.connect(lambda msg: self.log_panel.append(f"[ERRO] {msg}"))
         self.manager.finished_process.connect(self._on_generation_finished)
+        self.manager.finished_process.connect(self._handle_printing_queue)
         
         self.manager.start()
 
@@ -550,3 +552,71 @@ class MainWindow(QMainWindow):
         if folder:
             self.txt_output_path.setText(folder)
             self.settings.setValue("last_output_dir", folder)
+
+    def _handle_printing_queue(self):
+        """
+        Chamado quando o processo termina. 
+        Verifica se o usuário pediu para imprimir e abre o diálogo.
+        """
+        # 1. Verifica se a opção de imprimir estava marcada no JSON/Config
+        if not self.cached_model_data: return
+        
+        imp_settings = self.cached_model_data.get("imposition_settings", {})
+        should_print = imp_settings.get("print_after_generation", False)
+        
+        if not should_print:
+            return
+
+        # 2. Verifica se existem arquivos para imprimir
+        files_to_print = getattr(self.manager, "generated_files", [])
+        if not files_to_print:
+            self.log_panel.append("⚠️ Nenhum arquivo gerado para impressão.")
+            return
+
+        # 3. Configura a Impressora (Diálogo do Sistema)
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        dialog = QPrintDialog(printer, self)
+        
+        if dialog.exec() != QPrintDialog.DialogCode.Accepted:
+            self.log_panel.append("🖨️ Impressão cancelada pelo usuário.")
+            return
+
+        # 4. Loop de Impressão (Stream do Disco para o Spooler)
+        self.log_panel.append(f"🖨️ Enviando {len(files_to_print)} páginas para a impressora...")
+        
+        painter = QPainter()
+        if not painter.begin(printer):
+            self.log_panel.append("❌ Erro ao iniciar comunicação com a impressora.")
+            return
+
+        try:
+            output_dir = self.manager.output_dir
+            
+            for i, filename in enumerate(files_to_print):
+                # Se não for a primeira página, ejeta a folha anterior
+                if i > 0:
+                    printer.newPage()
+                
+                # Carrega do disco
+                full_path = output_dir / filename
+                if not full_path.exists():
+                    self.log_panel.append(f"❌ Arquivo não encontrado: {filename}")
+                    continue
+                
+                img = QImage(str(full_path))
+                if img.isNull():
+                    self.log_panel.append(f"❌ Falha ao ler imagem: {filename}")
+                    continue
+
+                # Desenha na folha (ocupa a folha toda, assumindo A4 configurado no driver)
+                # O QPainter desenha pixels. Se a imagem é 300DPI e a impressora 600DPI,
+                # o driver geralmente ajusta, mas podemos garantir desenhando no rect da página.
+                page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+                painter.drawImage(page_rect, img)
+                
+            self.log_panel.append("✅ Envio para impressão concluído!")
+            
+        except Exception as e:
+            self.log_panel.append(f"❌ Erro durante impressão: {e}")
+        finally:
+            painter.end()

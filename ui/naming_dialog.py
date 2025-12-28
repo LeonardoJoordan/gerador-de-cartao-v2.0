@@ -90,6 +90,22 @@ class NamingDialog(QDialog):
         self.grp_imposition = QGroupBox("Configurar Dimensões do Cartão (mm)")
         self.grp_imposition.setEnabled(False)
         ly_imp = QGridLayout(self.grp_imposition)
+
+        # [NOVO] Checkbox de Impressão Automática
+        self.chk_print_after = QCheckBox("Imprimir automaticamente após gerar")
+        self.chk_print_after.setToolTip("Gera os arquivos na pasta e envia para a impressora ao final.")
+        
+        # Recupera estado salvo
+        saved_print = self.imposition_settings.get("print_after_generation", False)
+        self.chk_print_after.setChecked(saved_print)
+
+        # Posiciona no topo (Linha 0)
+        ly_imp.addWidget(self.chk_print_after, 0, 0, 1, 2)
+        
+        # Linha separadora (Linha 1)
+        line_imp = QFrame()
+        line_imp.setFrameShape(QFrame.Shape.HLine)
+        ly_imp.addWidget(line_imp, 1, 0, 1, 2)
         
         # Inputs Numéricos
         self.spin_w_mm = QDoubleSpinBox()
@@ -102,25 +118,26 @@ class NamingDialog(QDialog):
         self.spin_h_mm.setSuffix(" mm")
         self.spin_h_mm.setDecimals(1)
 
-        # Carrega valores salvos ou calcula padrão (ex: 100mm de largura base)
+        # Carrega valores salvos
         saved_w = self.imposition_settings.get("target_w_mm", 0)
         if saved_w > 0:
             self.spin_w_mm.setValue(saved_w)
             self.spin_h_mm.setValue(saved_w / self.ratio)
         else:
-            self.spin_w_mm.setValue(100.0) # Valor inicial dummy
+            self.spin_w_mm.setValue(100.0)
             self.spin_h_mm.setValue(100.0 / self.ratio)
 
-        # Conexão de Proporção (Aspect Ratio Lock)
+        # Conexão de Proporção
         self.spin_w_mm.valueChanged.connect(self._on_width_changed)
         self.spin_h_mm.valueChanged.connect(self._on_height_changed)
 
-        ly_imp.addWidget(QLabel("Largura:"), 0, 0)
-        ly_imp.addWidget(self.spin_w_mm, 0, 1)
-        ly_imp.addWidget(QLabel("Altura:"), 1, 0)
-        ly_imp.addWidget(self.spin_h_mm, 1, 1)
+        # Posiciona inputs (Linhas 2 e 3)
+        ly_imp.addWidget(QLabel("Largura:"), 2, 0)
+        ly_imp.addWidget(self.spin_w_mm, 2, 1)
+        ly_imp.addWidget(QLabel("Altura:"), 3, 0)
+        ly_imp.addWidget(self.spin_h_mm, 3, 1)
         
-        ly_imp.addWidget(QLabel("<small style='color: gray'>O sistema manterá a proporção do modelo original.</small>"), 2, 0, 1, 2)
+        ly_imp.addWidget(QLabel("<small style='color: gray'>O sistema manterá a proporção.</small>"), 4, 0, 1, 2)
 
         layout.addWidget(self.grp_imposition)
         self._toggle_imposition_ui(self.chk_imposition.isChecked())
@@ -166,5 +183,6 @@ class NamingDialog(QDialog):
         return {
             "enabled": self.chk_imposition.isChecked(),
             "target_w_mm": self.spin_w_mm.value(),
-            "target_h_mm": self.spin_h_mm.value()
+            "target_h_mm": self.spin_h_mm.value(),
+            "print_after_generation": self.chk_print_after.isChecked()
         }
