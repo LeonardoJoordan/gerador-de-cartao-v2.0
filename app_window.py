@@ -1,7 +1,8 @@
+# app_window.py
 from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                 QSplitter, QPushButton, QApplication, QMessageBox,
-                                  QAbstractItemView, QLineEdit, QLabel, QFileDialog)
+                                  QLineEdit, QLabel, QFileDialog, QProgressBar) # <--- QProgressBar Adicionado
 from PySide6.QtCore import Qt, QSettings
 
 from ui.preview_panel import PreviewPanel
@@ -10,9 +11,9 @@ from ui.log_panel import LogPanel
 from ui.table_panel import TablePanel
 from core.renderer_v3 import NativeRenderer
 from ui.editor.editor_window import EditorWindow
-from core.naming import build_output_filename
-import json
+from core.worker import RenderWorker  # <--- Importamos o Worker
 from core.template_v2 import slugify_model_name
+import json
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -30,8 +31,9 @@ class MainWindow(QMainWindow):
         root.addWidget(splitter)
 
         self.current_output_pattern = "cartao_{nome}"
+        self.worker = None # Variável para segurar o processo em background
 
-        # --- Painel ESQUERDO (Preview + Controles + Log)
+        # --- Painel ESQUERDO ---
         left = QWidget()
         splitter.addWidget(left)
 
@@ -40,16 +42,32 @@ class MainWindow(QMainWindow):
         left_stack.setSpacing(10)
 
         self.preview_panel = PreviewPanel()
-
-        # Modelos fake só para teste visual (depois virão do catálogo)
-        self._reload_models_from_disk()
-
         self.controls_panel = ControlsPanel()
         self.log_panel = LogPanel()
 
         left_stack.addWidget(self.preview_panel, 5)
         left_stack.addWidget(self.controls_panel, 0)
         left_stack.addWidget(self.log_panel, 3)
+
+        # --- BARRA DE PROGRESSO (A "Barra Fina") ---
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(8)  # Bem fina (8px)
+        self.progress_bar.setTextVisible(False) # Sem texto dentro (só visual)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        # Estilo: Fundo cinza escuro, Preenchimento verde
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                background-color: #e0e0e0;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #27ae60;
+                border-radius: 4px;
+            }
+        """)
+        left_stack.addWidget(self.progress_bar, 0)
 
         # --- Seletor de Pasta de Saída ---
         grp_out = QWidget()
@@ -60,122 +78,116 @@ class MainWindow(QMainWindow):
         
         self.txt_output_path = QLineEdit()
         self.txt_output_path.setPlaceholderText("Padrão: ./output/nome_do_modelo")
-        # self.txt_output_path.setReadOnly(True) # Descomente se quiser impedir digitação manual
         ly_out.addWidget(self.txt_output_path)
 
         self.btn_sel_out = QPushButton("...")
         self.btn_sel_out.setFixedWidth(40)
-        self.btn_sel_out.setToolTip("Selecionar pasta de destino")
         self.btn_sel_out.clicked.connect(self._select_output_folder)
         ly_out.addWidget(self.btn_sel_out)
 
         left_stack.addWidget(grp_out, 0)
 
         self.btn_generate_cards = QPushButton("Gerar cartões")
-        self.btn_generate_cards.setMinimumHeight(44)  # opcional: deixa mais “botão principal”
-        self.btn_generate_cards.clicked.connect(self._generate_cards_placeholder)
-        app = QApplication.instance()
+        self.btn_generate_cards.setMinimumHeight(44)
+        self.btn_generate_cards.clicked.connect(self._generate_cards_async) # <--- Nova função async
         left_stack.addWidget(self.btn_generate_cards, 0)
 
-        # --- Painel DIREITO (Tabela)
+        # --- Painel DIREITO ---
         self.table_panel = TablePanel()
         splitter.addWidget(self.table_panel)
 
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
 
-        self.cached_model_data = None # Cache para o Live Preview
+        self.cached_model_data = None
+        
+        self._reload_models_from_disk()
         
         self.active_model_name = self.preview_panel.cbo_models.currentText()
         self._on_model_changed(self.active_model_name)
 
-        # quando trocar o modelo no combo, atualiza estado
         self.preview_panel.cbo_models.currentTextChanged.connect(self._on_model_changed)
-        
-        # Conecta a seleção da tabela ao Live Preview
         self.table_panel.table.itemSelectionChanged.connect(self._on_table_selection)
 
-        # botões novos
         self.controls_panel.btn_add_model.clicked.connect(self._on_add_model)
         self.controls_panel.btn_remove_model.clicked.connect(self._on_remove_model)
         self.controls_panel.btn_config_model.clicked.connect(self._open_model_dialog)
 
-        # --- Configurações Persistentes ---
         self.settings = QSettings("AutoMakeCard", "MainApp")
         last_output = self.settings.value("last_output_dir", "")
         if last_output:
             self.txt_output_path.setText(str(last_output))
 
-    def _generate_cards_placeholder(self):
-        # 1. Coleta dados frescos da tabela
+    def _generate_cards_async(self):
+        """Inicia o processo em background (sem travar a tela)."""
+        # 1. Validações Iniciais
         rows_plain, rows_rich = self._scrape_table_data()
-        
         if not rows_plain:
             self.log_panel.append("AVISO: A tabela está vazia. Nada a gerar.")
             return
-
-        # 2. Verifica modelo e caminhos
-        from core.template_v2 import slugify_model_name
-        from core.naming import build_output_filename
-        from core.renderer_v3 import NativeRenderer
-        import json
-        from pathlib import Path
 
         slug = slugify_model_name(self.active_model_name)
         template_path = Path("models") / slug / "template_v3.json"
 
         if not template_path.exists():
-            self.log_panel.append(f"ERRO: O modelo '{self.active_model_name}' não foi configurado no Editor V3.")
+            self.log_panel.append(f"ERRO: Modelo '{self.active_model_name}' não encontrado.")
             return
 
+        # 2. Prepara Dados e Renderer
         with open(template_path, "r", encoding="utf-8") as f:
             tpl_data = json.load(f)
+            # Resolve paths absolutos (igual fazíamos antes)
+            model_dir = template_path.parent
+            if tpl_data.get("background_path") and not Path(tpl_data["background_path"]).is_absolute():
+                tpl_data["background_path"] = str(model_dir / tpl_data["background_path"])
+            for sig in tpl_data.get("signatures", []):
+                if not Path(sig["path"]).is_absolute():
+                    sig["path"] = str(model_dir / sig["path"])
 
-        # [FIX] Resolve caminhos relativos para absolutos antes de renderizar
-        model_dir = template_path.parent
-        if tpl_data.get("background_path") and not Path(tpl_data["background_path"]).is_absolute():
-            tpl_data["background_path"] = str(model_dir / tpl_data["background_path"])
-        
-        for sig in tpl_data.get("signatures", []):
-            if not Path(sig["path"]).is_absolute():
-                sig["path"] = str(model_dir / sig["path"])
-
-        # 3. Prepara o motor e diretório de saída
         renderer = NativeRenderer(tpl_data)
-        
-        # Define diretório de saída (Personalizado ou Padrão)
+
+        # 3. Define Output
         custom_path = self.txt_output_path.text().strip()
         if custom_path:
             output_dir = Path(custom_path)
-            # Memoriza o caminho digitado manualmente
             self.settings.setValue("last_output_dir", custom_path)
         else:
             output_dir = Path("output") / slug
-            
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 4. Configura UI para o estado "Processando"
+        self.btn_generate_cards.setEnabled(False)
+        self.btn_generate_cards.setText("Gerando... (Aguarde)")
+        self.progress_bar.setValue(0)
+        self.log_panel.append(f"--- Iniciando lote de {len(rows_plain)} cartões ---")
+
+        # 5. Lança o Worker Thread
+        self.worker = RenderWorker(renderer, rows_plain, rows_rich, output_dir, self.current_output_pattern)
         
-        used_names = set()
-        self.log_panel.append(f"Iniciando renderização de {len(rows_plain)} cartões...")
+        # Conecta os sinais do worker aos métodos da janela
+        self.worker.progress_updated.connect(self.progress_bar.setValue)
+        self.worker.log_updated.connect(self.log_panel.append)
+        self.worker.error_occurred.connect(lambda msg: self.log_panel.append(f"[ERRO] {msg}"))
+        self.worker.finished_process.connect(self._on_generation_finished)
+        
+        self.worker.start()
 
-        # 4. Loop de geração
-        for i, row in enumerate(rows_plain):
-            # Define nome do arquivo (ex: cartao_Joao.png)
-            filename = build_output_filename(self.current_output_pattern, row, used_names)
-            out_path = output_dir / f"{filename}.png"
-            
-            # Renderiza nativamente usando os dados extraídos
-            renderer.render_row(row, rows_rich[i], out_path)
-            self.log_panel.append(f"[OK] Gerado: {out_path.name}")
+    def _on_generation_finished(self):
+        """Chamado quando o worker termina (com sucesso ou erro)."""
+        self.btn_generate_cards.setEnabled(True)
+        self.btn_generate_cards.setText("Gerar cartões")
+        self.progress_bar.setValue(100) # Garante que encheu
+        self.log_panel.append("=== Processo Finalizado ===")
+        
+        # Opcional: Mostra alerta visual
+        # QMessageBox.information(self, "Concluído", "Geração de cartões finalizada!")
 
-        self.log_panel.append(f"=== Processo concluído! Arquivos em: {output_dir} ===")
-
-
+    # --- Métodos Auxiliares Mantidos Iguais ---
     def _on_model_changed(self, name: str):
         self.preview_panel.set_preview_text(f"Prévia do modelo selecionado:\n{name}")
         self.log_panel.append(f"Modelo ativo: {name}")
         self.active_model_name = name
 
-        # Carrega colunas dinamicamente do JSON V3
         if not name: return
 
         slug = slugify_model_name(name)
@@ -186,7 +198,6 @@ class MainWindow(QMainWindow):
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     
-                    # [FIX] Resolve assets relativos para o preview
                     model_dir = json_path.parent
                     if data.get("background_path") and not Path(data["background_path"]).is_absolute():
                         data["background_path"] = str(model_dir / data["background_path"])
@@ -196,55 +207,37 @@ class MainWindow(QMainWindow):
 
                     placeholders = data.get("placeholders", [])
                     
-                    # Atualiza a tabela (headers)
                     self._update_table_columns(placeholders)
                     self.log_panel.append(f"Colunas carregadas: {placeholders}")
                     
-                    # Salva no cache para o Live Preview usar sem ler disco
                     self.cached_model_data = data
                     
                     try:
                         renderer = NativeRenderer(data)
-                        # Gera o pixmap padrão (com nomes das variáveis) para quando não houver seleção
                         preview_pix = renderer.render_to_pixmap(row_rich=None)
                         self.preview_panel.set_preview_pixmap(preview_pix)
-                        self.log_panel.append("Preview gerado com sucesso (incluindo camadas de texto)")
                     except Exception as e:
-                        import traceback
                         self.log_panel.append(f"Erro ao gerar preview: {e}")
-                        self.log_panel.append(f"Traceback: {traceback.format_exc()}")
-                        # Fallback: não mostra nada (mantém preview vazio ou com mensagem de erro)
                         self.preview_panel.set_preview_text("Erro ao gerar preview do modelo")
             except Exception as e:
                 self.log_panel.append(f"Erro ao ler colunas do modelo: {e}")
         else:
-            self.log_panel.append("Aviso: template_v3.json não encontrado para este modelo.")
+            self.log_panel.append("Aviso: template_v3.json não encontrado.")
 
     def _on_editor_saved(self, model_name, placeholders):
-        """Chamado quando o Editor salva um modelo. Recarrega a lista e seleciona o salvo."""
         self.log_panel.append(f"Modelo '{model_name}' salvo. Atualizando lista...")
-        # Recarrega do disco e força a seleção do novo modelo
-        # A mudança de seleção disparará _on_model_changed, que atualizará a tabela/preview
         self._reload_models_from_disk(select_name=model_name)
     
     def _update_table_columns(self, placeholders):
-        """Atualiza os cabeçalhos da tabela baseada nos placeholders do modelo."""
-        # 1. Limpa tudo (zera colunas e linhas)
         self.table_panel.table.clearContents()
         self.table_panel.table.setRowCount(0)
         self.table_panel.table.setColumnCount(0)
         
-        if not placeholders:
-            return
+        if not placeholders: return
             
-        # 2. Cria as colunas novas
         self.table_panel.table.setColumnCount(len(placeholders))
         self.table_panel.table.setHorizontalHeaderLabels(placeholders)
-        
-        # 3. Garante pelo menos uma linha vazia para o usuário começar a digitar
         self.table_panel.table.setRowCount(1)
-        
-        self.log_panel.append(f"Tabela configurada: {len(placeholders)} colunas ({', '.join(placeholders)})")
 
     def _open_model_dialog(self):
         if not self.active_model_name:
@@ -252,26 +245,17 @@ class MainWindow(QMainWindow):
             return
 
         self.editor_window = EditorWindow(self)
-        # Conecta ao novo callback que lida com o reload
         self.editor_window.modelSaved.connect(self._on_editor_saved)
 
-        from core.template_v2 import slugify_model_name
         slug = slugify_model_name(self.active_model_name)
         json_path = Path("models") / slug / "template_v3.json"
 
         if json_path.exists():
-            self.log_panel.append(f"A carregar ficheiro: {json_path}")
             self.editor_window.load_from_json(str(json_path))
-        else:
-            self.log_panel.append("Nenhum ficheiro V3 encontrado. A iniciar modelo novo.")
         
         self.editor_window.show()
 
     def _reload_models_from_disk(self, select_name: str | None = None):
-        """Recarrega o ComboBox com base em models/*/template_v3.json"""
-        from pathlib import Path
-        import json
-
         self.preview_panel.cbo_models.blockSignals(True)
         self.preview_panel.cbo_models.clear()
 
@@ -280,8 +264,7 @@ class MainWindow(QMainWindow):
 
         found = []
         for folder in sorted(models_dir.iterdir()):
-            if not folder.is_dir():
-                continue
+            if not folder.is_dir(): continue
             json_path = folder / "template_v3.json"
             if json_path.exists():
                 try:
@@ -289,7 +272,6 @@ class MainWindow(QMainWindow):
                     name = data.get("name", folder.name)
                     found.append(name)
                 except Exception:
-                    # se um json estiver corrompido, só ignora
                     continue
 
         for name in found:
@@ -297,65 +279,43 @@ class MainWindow(QMainWindow):
 
         self.preview_panel.cbo_models.blockSignals(False)
 
-        # selecionar algo após reload
         if select_name:
             idx = self.preview_panel.cbo_models.findText(select_name)
             if idx >= 0:
                 self.preview_panel.cbo_models.setCurrentIndex(idx)
                 return
 
-        # se não passou select_name, seleciona o primeiro automaticamente
         if self.preview_panel.cbo_models.count() > 0:
             self.preview_panel.cbo_models.setCurrentIndex(0)
 
-
     def _on_add_model(self):
-        """Adicionar modelo = abrir editor em branco."""
         self.editor_window = EditorWindow(self)
-        # Conecta ao novo callback que lida com o reload
         self.editor_window.modelSaved.connect(self._on_editor_saved)
         self.editor_window.show()
 
-
     def _on_remove_model(self):
-        """Remove do disco o modelo ativo/selecionado no combo."""
-        from pathlib import Path
         import shutil
-        from PySide6.QtWidgets import QMessageBox
-        from core.template_v2 import slugify_model_name
-
         model_name = (self.preview_panel.cbo_models.currentText() or "").strip()
-        if not model_name:
-            QMessageBox.warning(self, "Atenção", "Nenhum modelo selecionado para remover.")
-            return
+        if not model_name: return
 
         slug = slugify_model_name(model_name)
         model_dir = Path("models") / slug
 
-        if not model_dir.exists():
-            QMessageBox.warning(self, "Erro", f"Pasta do modelo não encontrada:\n{model_dir}")
-            return
+        if not model_dir.exists(): return
 
-        resp = QMessageBox.question(
-            self,
-            "Confirmar exclusão",
-            f"Tem certeza que deseja excluir o modelo:\n\n{model_name}\n\nIsso apagará a pasta:\n{model_dir}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if resp != QMessageBox.StandardButton.Yes:
-            return
+        resp = QMessageBox.question(self, "Confirmar exclusão", f"Excluir '{model_name}'?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if resp != QMessageBox.StandardButton.Yes: return
 
         try:
             shutil.rmtree(model_dir)
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao excluir o modelo:\n{e}")
+            QMessageBox.critical(self, "Erro", f"Falha ao excluir: {e}")
             return
 
         self.log_panel.append(f"Modelo excluído: {model_name}")
         self._reload_models_from_disk()
 
     def _get_row_data_rich(self, row_idx):
-        """Extrai os dados (Rich Text) de uma única linha para o Live Preview."""
         table = self.table_panel.table
         cols = table.columnCount()
         headers = [table.horizontalHeaderItem(c).text() for c in range(cols)]
@@ -364,90 +324,55 @@ class MainWindow(QMainWindow):
         for c in range(cols):
             key = headers[c]
             item = table.item(row_idx, c)
-            
-            # Pega o Rich Text (UserRole) ou o texto puro se não houver
             val = ""
             if item:
                 val = item.data(Qt.ItemDataRole.UserRole)
-                if not val:
-                    val = item.text()
-            
+                if not val: val = item.text()
             row_data[key] = val
         return row_data
 
     def _on_table_selection(self):
-        """Chamado quando o usuário clica na tabela. Gera preview em tempo real."""
-        if not self.cached_model_data:
-            return
-
-        # Pega a linha atual (onde está o foco)
+        if not self.cached_model_data: return
         row = self.table_panel.table.currentRow()
-        if row < 0:
-            return
+        if row < 0: return
 
-        # Extrai dados e renderiza
         try:
             row_rich = self._get_row_data_rich(row)
             renderer = NativeRenderer(self.cached_model_data)
-            
-            # Gera imagem usando os dados da linha
             pix = renderer.render_to_pixmap(row_rich=row_rich)
             self.preview_panel.set_preview_pixmap(pix)
         except Exception as e:
             print(f"Erro no Live Preview: {e}")
     
     def _scrape_table_data(self):
-        """Varre a QTableWidget e monta as listas de dados para o renderizador."""
         table = self.table_panel.table
         rows = table.rowCount()
         cols = table.columnCount()
-        
         headers = [table.horizontalHeaderItem(c).text() for c in range(cols)]
-        
-        data_plain = []
-        data_rich = []
+        data_plain, data_rich = [], []
 
-        # Pula a linha 0 se ela estiver vazia/inutilizável, mas no nosso caso
-        # assumimos que todas as linhas visíveis são dados.
         for r in range(rows):
-            row_p = {}
-            row_r = {}
+            row_p, row_r = {}, {}
             is_empty = True
-            
             for c in range(cols):
                 key = headers[c]
                 item = table.item(r, c)
-                
-                # Se item for None, assume vazio
                 val_plain = item.text().strip() if item else ""
-                
-                # Tenta pegar o HTML rico (salvo no UserRole pelo paste), senão usa o texto puro
                 val_rich = item.data(Qt.ItemDataRole.UserRole) if item else ""
-                if not val_rich:
-                    val_rich = val_plain
+                if not val_rich: val_rich = val_plain
                 
-                if val_plain:
-                    is_empty = False
-                    
+                if val_plain: is_empty = False
                 row_p[key] = val_plain
-                # O renderizador espera chaves sem {}, mas o template usa {}.
-                # Vamos garantir compatibilidade salvando com a chave limpa
-                # (O renderer_v3 já trata isso, mas é bom garantir).
                 row_r[key] = val_rich
 
-            # Só adiciona se a linha tiver algum conteúdo
             if not is_empty:
                 data_plain.append(row_p)
                 data_rich.append(row_r)
-                
         return data_plain, data_rich
     
     def _select_output_folder(self):
-        """Abre diálogo para selecionar pasta de saída."""
-        # Tenta abrir o diálogo já na última pasta usada
         start_dir = self.txt_output_path.text() or ""
         folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Saída", start_dir)
-        
         if folder:
             self.txt_output_path.setText(folder)
             self.settings.setValue("last_output_dir", folder)
