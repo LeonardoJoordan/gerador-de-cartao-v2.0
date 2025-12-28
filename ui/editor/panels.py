@@ -209,16 +209,41 @@ class EditorDeTextoPanel(QWidget):
         self.txt_content.setFocus()
 
     def load_from_item(self, box: DesignerBox):
+        # 1. Bloqueios de segurança
         self.blockSignals(True) 
-        
-        self.txt_content.setHtml(box.text_item.toHtml())
-        
+        self.txt_content.blockSignals(True)
+
+        # 2. Obtém a fonte e HTML originais
         font = box.text_item.font()
+        html = box.text_item.toHtml()
+        
+        # 3. PRIMEIRO atualiza os controles visuais (combos/spins)
         self.cbo_font.setCurrentFont(font)
         self.spin_size.setValue(int(font.pointSize()))
         self.btn_bold.setChecked(font.bold())
+        self.btn_italic.setChecked(font.italic())
+        self.btn_underline.setChecked(font.underline())
         
-        # Horizontal
+        # 4. DEPOIS carrega o HTML
+        self.txt_content.setHtml(html)
+
+        # 5. FORÇA a fonte em todo o documento (correção robusta)
+        cursor = self.txt_content.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+
+        fmt = QTextCharFormat()
+        fmt.setFontFamily(font.family())
+        fmt.setFontPointSize(font.pointSize())
+        fmt.setFontWeight(font.weight())
+        fmt.setFontItalic(font.italic())
+        fmt.setFontUnderline(font.underline())
+        
+        cursor.mergeCharFormat(fmt)
+        cursor.clearSelection()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.txt_content.setTextCursor(cursor)
+
+        # 6. Atualiza Alinhamentos (Horizontal)
         opt = box.text_item.document().defaultTextOption()
         align = opt.alignment()
         if align & Qt.AlignmentFlag.AlignRight: self.cbo_align.setCurrentIndex(2)
@@ -226,23 +251,24 @@ class EditorDeTextoPanel(QWidget):
         elif align & Qt.AlignmentFlag.AlignJustify: self.cbo_align.setCurrentIndex(3)
         else: self.cbo_align.setCurrentIndex(0)
 
-        # Vertical
+        # 7. Atualiza Alinhamentos (Vertical)
         v_idx = 0
         if box.vertical_align == "center": v_idx = 1
         elif box.vertical_align == "bottom": v_idx = 2
         self.cbo_valign.setCurrentIndex(v_idx)
         
-        # Espaçamento
-        cursor = QTextCursor(box.text_item.document())
-        fmt = cursor.blockFormat()
-        self.spin_indent.setValue(fmt.textIndent())
+        # 8. Atualiza Espaçamentos (Recuo/Entrelinha)
+        cursor_block = QTextCursor(box.text_item.document())
+        fmt_block = cursor_block.blockFormat()
+        self.spin_indent.setValue(fmt_block.textIndent())
         
-        # LineHeightTypes.ProportionalHeight = 1
-        if fmt.lineHeightType() == 1:
-            self.spin_lh.setValue(fmt.lineHeight() / 100.0)
+        if fmt_block.lineHeightType() == 1:
+            self.spin_lh.setValue(fmt_block.lineHeight() / 100.0)
         else:
             self.spin_lh.setValue(1.15)
 
+        # 9. Libera os sinais
+        self.txt_content.blockSignals(False)
         self.blockSignals(False)
 
 class AssinaturaPanel(QWidget):

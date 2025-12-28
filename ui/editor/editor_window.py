@@ -394,8 +394,8 @@ class EditorWindow(QMainWindow):
                     "y": int(pos.y()),
                     "w": int(r.width()),
                     "h": int(r.height()),
-                    "font_family": font.family(), 
-                    "font_size": int(font.pointSize()),
+                    "font_family": item.text_item.document().defaultFont().family(),
+                    "font_size": int(item.text_item.document().defaultFont().pointSize()),
                     "align": h_align,
                     "vertical_align": item.vertical_align,
                     "indent_px": int(fmt.textIndent()),
@@ -588,7 +588,12 @@ class EditorWindow(QMainWindow):
             # Agora aplicamos o HTML (texto rico) que contém a formatação (negrito, etc)
             if "html" in b:
                 box.text_item.setHtml(b["html"])
-            
+                
+                # [FIX CRÍTICO] Define a fonte padrão do documento para evitar reset ao editar
+                from PySide6.QtGui import QFont
+                default_font = QFont(b.get("font_family", "Arial"), b.get("font_size", 16))
+                box.text_item.document().setDefaultFont(default_font)
+
             box.vertical_align = b.get("vertical_align", "top")
 
             # [FIX] Aplica o alinhamento horizontal visualmente ao carregar
