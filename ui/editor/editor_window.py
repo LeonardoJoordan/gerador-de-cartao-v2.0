@@ -50,75 +50,115 @@ class EditorWindow(QMainWindow):
 
         # --- 2. PAINEL LATERAL (CONTROLES) ---
         right_container = QWidget()
-        right_container.setFixedWidth(320)
+        right_container.setFixedWidth(400)
         right_layout = QVBoxLayout(right_container)
         
-        # Grupo: Guias
+        # Grupo: Guias (Layout Otimizado)
         grp_guides = QFrame()
         ly_guides = QVBoxLayout(grp_guides)
         ly_guides.setContentsMargins(0, 0, 0, 10)
-        ly_guides.addWidget(QLabel("<b>LINHAS GUIA</b>"))
-        ly_guides.addWidget(QLabel("<small>Duplo clique na linha para editar (mm)</small>"))
         
-        btn_guide_v = QPushButton("Add Guia Vertical (|)")
+        # Cabeçalho unificado
+        lbl_guides = QLabel("<b>LINHAS GUIA</b> <small style='color:gray'>(Duplo clique p/ editar)</small>")
+        ly_guides.addWidget(lbl_guides)
+        
+        # Botões lado a lado
+        row_guides = QHBoxLayout()
+        row_guides.setSpacing(10)
+        
+        btn_guide_v = QPushButton("Vertical (|)")
         btn_guide_v.clicked.connect(lambda: self.add_guide(vertical=True))
         
-        btn_guide_h = QPushButton("Add Guia Horizontal (-)")
+        btn_guide_h = QPushButton("Horizontal (—)")
         btn_guide_h.clicked.connect(lambda: self.add_guide(vertical=False))
         
-        ly_guides.addWidget(btn_guide_v)
-        ly_guides.addWidget(btn_guide_h)
+        row_guides.addWidget(btn_guide_v)
+        row_guides.addWidget(btn_guide_h)
+        ly_guides.addLayout(row_guides)
+
         right_layout.addWidget(grp_guides)
 
         # Separador
         self._add_separator(right_layout)
 
-        # Grupo: Ordem das Colunas
-        grp_cols = QFrame()
-        ly_cols = QVBoxLayout(grp_cols)
-        ly_cols.setContentsMargins(0, 0, 0, 10)
-        ly_cols.addWidget(QLabel("<b>ORDEM DAS COLUNAS</b>"))
-        ly_cols.addWidget(QLabel("<small>Arraste para ordenar</small>"))
-
-        self.lst_placeholders = QListWidget()
-        self.lst_placeholders.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.lst_placeholders.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.lst_placeholders.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.lst_placeholders.setMaximumHeight(120)
-        ly_cols.addWidget(self.lst_placeholders)
-
-        right_layout.addWidget(grp_cols)
-        self._add_separator(right_layout)
-
-        # Grupo: Adicionar Elementos
+        # Grupo: Adicionar Elementos (Layout Otimizado)
         grp_boxes = QFrame()
         ly_boxes = QVBoxLayout(grp_boxes)
         ly_boxes.setContentsMargins(0, 0, 0, 10)
         ly_boxes.addWidget(QLabel("<b>ELEMENTOS</b>"))
         
+        # 1. Botão Principal (Texto) - Mantém largura total
         self.btn_add = QPushButton("+ Adicionar Caixa Texto")
         self.btn_add.setMinimumHeight(40)
         self.btn_add.clicked.connect(self.add_new_box)
         ly_boxes.addWidget(self.btn_add)
-        self.btn_add_bg = QPushButton("🖼️ Definir Imagem de Fundo")
-        self.btn_add_bg.clicked.connect(self._on_click_load_bg)
-        ly_boxes.addWidget(self.btn_add_bg)
 
-        self.btn_add_sig = QPushButton("✍️ Adicionar Assinatura")
+        # 2. Botões Secundários (Fundo e Assinatura) - Lado a Lado
+        row_assets = QHBoxLayout()
+        row_assets.setSpacing(10)
+
+        self.btn_add_bg = QPushButton("🖼️ Fundo")
+        self.btn_add_bg.setToolTip("Definir imagem de fundo")
+        self.btn_add_bg.setMinimumHeight(40) # Mesma altura do botão de texto
+        self.btn_add_bg.clicked.connect(self._on_click_load_bg)
+        
+        self.btn_add_sig = QPushButton("✍️ Assinatura")
+        self.btn_add_sig.setToolTip("Adicionar imagem de assinatura")
+        self.btn_add_sig.setMinimumHeight(40) # Mesma altura do botão de texto
         self.btn_add_sig.clicked.connect(self._on_click_add_signature)
-        ly_boxes.addWidget(self.btn_add_sig)
+        
+        row_assets.addWidget(self.btn_add_bg)
+        row_assets.addWidget(self.btn_add_sig)
+        ly_boxes.addLayout(row_assets)
+
         right_layout.addWidget(grp_boxes)
 
         # Separador
         self._add_separator(right_layout)
 
-        # --- PAINÉIS DE PROPRIEDADES (Importados) ---
+       # --- PAINÉIS DE PROPRIEDADES (Importados) ---
+        
+        # CONTAINER MISTO: Dimensões (Esq) | Separador | Ordem Colunas (Dir)
+        container_misto = QWidget()
+        layout_misto = QHBoxLayout(container_misto)
+        layout_misto.setContentsMargins(0, 0, 0, 0)
+        layout_misto.setSpacing(10)
+
+        # 1. LADO ESQUERDO: Painel de Dimensões
         self.caixa_texto_panel = CaixaDeTextoPanel()
         self.caixa_texto_panel.setEnabled(False)
         self.caixa_texto_panel.widthChanged.connect(self.update_width)
         self.caixa_texto_panel.heightChanged.connect(self.update_height)
-        right_layout.addWidget(self.caixa_texto_panel)
+        layout_misto.addWidget(self.caixa_texto_panel, 1)
 
+        # 2. SEPARADOR VERTICAL
+        v_sep = QFrame()
+        v_sep.setFrameShape(QFrame.Shape.VLine)
+        v_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        v_sep.setStyleSheet("color: #ccc;") # Cor sutil
+        layout_misto.addWidget(v_sep)
+
+        # 3. LADO DIREITO: Ordem das Colunas
+        grp_cols_compact = QWidget()
+        ly_cols_compact = QVBoxLayout(grp_cols_compact)
+        ly_cols_compact.setContentsMargins(0, 0, 0, 0)
+        ly_cols_compact.setSpacing(2)
+        
+        # [UX] Título padronizado com <b>
+        lbl_cols = QLabel("<b>ORDEM DAS CAMADAS</b>")
+        ly_cols_compact.addWidget(lbl_cols)
+
+        self.lst_placeholders = QListWidget()
+        self.lst_placeholders.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.lst_placeholders.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.lst_placeholders.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.lst_placeholders.setFixedHeight(75) 
+        ly_cols_compact.addWidget(self.lst_placeholders)
+        
+        layout_misto.addWidget(grp_cols_compact, 1)
+
+        right_layout.addWidget(container_misto)
+        
         self._add_separator(right_layout)
 
         self.editor_texto_panel = EditorDeTextoPanel()

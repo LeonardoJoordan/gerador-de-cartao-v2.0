@@ -16,25 +16,30 @@ class CaixaDeTextoPanel(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        lbl = QLabel("CAIXA DE TEXTO")
-        lbl.setStyleSheet("font-weight: bold; font-size: 12px; margin-bottom: 5px;")
+        # [UX] Título padronizado com <b> (igual ao resto da UI)
+        lbl = QLabel("<b>DIMENSÕES DA CAIXA</b>")
         layout.addWidget(lbl)
         
+        # FormLayout compacto
         form = QFormLayout()
-        form.setSpacing(8)
+        form.setSpacing(4)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
 
+        # Largura
         self.spin_w = QSpinBox()
         self.spin_w.setRange(10, 5000)
         self.spin_w.setSuffix(" px")
         self.spin_w.valueChanged.connect(self.widthChanged.emit)
-        form.addRow("Largura:", self.spin_w)
+        form.addRow("Larg:", self.spin_w)
 
+        # Altura
         self.spin_h = QSpinBox()
         self.spin_h.setRange(10, 5000)
         self.spin_h.setSuffix(" px")
         self.spin_h.valueChanged.connect(self.heightChanged.emit)
-        form.addRow("Altura:", self.spin_h)
+        form.addRow("Alt:", self.spin_h)
 
         layout.addLayout(form)
         layout.addStretch()
@@ -71,7 +76,7 @@ class EditorDeTextoPanel(QWidget):
         layout.addWidget(QLabel("Texto:"))
         self.txt_content = QTextEdit()
         self.txt_content.setStyleSheet("background-color: #FFFFFF; color: #000000;")
-        self.txt_content.setMinimumHeight(80)
+        self.txt_content.setMinimumHeight(160)
         self.txt_content.textChanged.connect(lambda: self.htmlChanged.emit(self.txt_content.toHtml()))
         layout.addWidget(self.txt_content)
         
