@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinB
                                QComboBox, QDoubleSpinBox)
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTextCursor, QTextBlockFormat, QTextCharFormat
-
+import re
 # Importação para Type Hinting (ajuda na IDE)
 from .canvas_items import DesignerBox, SignatureItem
 
@@ -77,7 +77,8 @@ class EditorDeTextoPanel(QWidget):
         self.txt_content = QTextEdit()
         self.txt_content.setStyleSheet("background-color: #FFFFFF; color: #000000;")
         self.txt_content.setMinimumHeight(160)
-        self.txt_content.textChanged.connect(lambda: self.htmlChanged.emit(self.txt_content.toHtml()))
+        # [FIX] Usa um método intermediário para limpar estilo de fonte/tamanho antes de emitir
+        self.txt_content.textChanged.connect(self._emit_clean_html)
         layout.addWidget(self.txt_content)
         
         # 2. Fonte e Tamanho
@@ -214,41 +215,44 @@ class EditorDeTextoPanel(QWidget):
         self.txt_content.setFocus()
 
     def load_from_item(self, box: DesignerBox):
-        # 1. Bloqueios de segurança
+        # 1. Bloqueios
         self.blockSignals(True) 
         self.txt_content.blockSignals(True)
 
-        # 2. Obtém a fonte e HTML originais
-        font = box.text_item.font()
+        # 2. Carrega o HTML original e a Fonte Real (do Item)
         html = box.text_item.toHtml()
+        real_font = box.text_item.font()
         
-        # 3. PRIMEIRO atualiza os controles visuais (combos/spins)
-        self.cbo_font.setCurrentFont(font)
-        self.spin_size.setValue(int(font.pointSize()))
-        self.btn_bold.setChecked(font.bold())
-        self.btn_italic.setChecked(font.italic())
-        self.btn_underline.setChecked(font.underline())
-        
-        # 4. DEPOIS carrega o HTML
         self.txt_content.setHtml(html)
 
-        # 5. FORÇA a fonte em todo o documento (correção robusta)
+        # [UX] FORMATAÇÃO VISUAL DO EDITOR (Desacoplada)
+        # Aqui forçamos o editor a mostrar sempre uma fonte confortável (Ex: Segoe UI, 11pt)
+        # Isso NÃO altera o cartão, pois filtraremos isso no '_emit_clean_html'.
         cursor = self.txt_content.textCursor()
         cursor.select(QTextCursor.SelectionType.Document)
 
-        fmt = QTextCharFormat()
-        fmt.setFontFamily(font.family())
-        fmt.setFontPointSize(font.pointSize())
-        fmt.setFontWeight(font.weight())
-        fmt.setFontItalic(font.italic())
-        fmt.setFontUnderline(font.underline())
+        fmt_ui = QTextCharFormat()
+        fmt_ui.setFontFamily("Segoe UI") # Fonte de sistema limpa
+        fmt_ui.setFontPointSize(11)      # Tamanho fixo legível
+        # Mantemos peso/itálico/sublinhado para feedback visual semântico
+        fmt_ui.setFontWeight(real_font.weight())
+        fmt_ui.setFontItalic(real_font.italic())
+        fmt_ui.setFontUnderline(real_font.underline())
         
-        cursor.mergeCharFormat(fmt)
+        cursor.mergeCharFormat(fmt_ui)
         cursor.clearSelection()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.txt_content.setTextCursor(cursor)
 
-        # 6. Atualiza Alinhamentos (Horizontal)
+        # 3. Atualiza os CONTROLES com a Fonte REAL (do Item)
+        # O usuário vê "Arial 50" nos combos, mas lê "Segoe 11" na caixa de texto.
+        self.cbo_font.setCurrentFont(real_font)
+        self.spin_size.setValue(int(real_font.pointSize()))
+        self.btn_bold.setChecked(real_font.bold())
+        self.btn_italic.setChecked(real_font.italic())
+        self.btn_underline.setChecked(real_font.underline())
+        
+        # 4. Atualiza Alinhamentos (Horizontal)
         opt = box.text_item.document().defaultTextOption()
         align = opt.alignment()
         if align & Qt.AlignmentFlag.AlignRight: self.cbo_align.setCurrentIndex(2)
@@ -256,13 +260,13 @@ class EditorDeTextoPanel(QWidget):
         elif align & Qt.AlignmentFlag.AlignJustify: self.cbo_align.setCurrentIndex(3)
         else: self.cbo_align.setCurrentIndex(0)
 
-        # 7. Atualiza Alinhamentos (Vertical)
+        # 5. Atualiza Alinhamentos (Vertical)
         v_idx = 0
         if box.vertical_align == "center": v_idx = 1
         elif box.vertical_align == "bottom": v_idx = 2
         self.cbo_valign.setCurrentIndex(v_idx)
         
-        # 8. Atualiza Espaçamentos (Recuo/Entrelinha)
+        # 6. Atualiza Espaçamentos
         cursor_block = QTextCursor(box.text_item.document())
         fmt_block = cursor_block.blockFormat()
         self.spin_indent.setValue(fmt_block.textIndent())
@@ -272,9 +276,23 @@ class EditorDeTextoPanel(QWidget):
         else:
             self.spin_lh.setValue(1.15)
 
-        # 9. Libera os sinais
+        # 7. Libera
         self.txt_content.blockSignals(False)
         self.blockSignals(False)
+
+    def _emit_clean_html(self):
+        """
+        Pega o HTML do editor, remove definições de família e tamanho de fonte,
+        e emite o sinal. Assim, o Item da cena usa sua própria DefaultFont.
+        """
+        raw_html = self.txt_content.toHtml()
+        
+        # Regex para remover font-family e font-size do CSS inline gerado pelo Qt
+        # Ex remove: font-family:'Arial'; ou font-size:12pt;
+        clean_html = re.sub(r"font-family:[^;\"']+(;)?", "", raw_html)
+        clean_html = re.sub(r"font-size:[^;\"']+(;)?", "", clean_html)
+        
+        self.htmlChanged.emit(clean_html)
 
 class AssinaturaPanel(QWidget):
     sideChanged = Signal(int)
