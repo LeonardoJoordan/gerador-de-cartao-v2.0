@@ -135,7 +135,9 @@ class MainWindow(QMainWindow):
 
     # --- [NOVO] Lógica de Renomear ---
     def _on_rename_model(self):
-        old_name = self.active_model_name
+        # [FIX] Fonte da verdade é a UI
+        old_name = self.preview_panel.cbo_models.currentText()
+        
         if not old_name:
             QMessageBox.warning(self, "Atenção", "Selecione um modelo para renomear.")
             return
@@ -185,7 +187,9 @@ class MainWindow(QMainWindow):
 
     # --- Métodos Existentes (Duplicar, Adicionar, etc) ---
     def _on_duplicate_model(self):
-        original_name = self.active_model_name
+        # [FIX] Lê diretamente da UI para garantir que não estamos usando um cache obsoleto
+        original_name = self.preview_panel.cbo_models.currentText()
+        
         if not original_name:
             QMessageBox.warning(self, "Atenção", "Selecione um modelo para duplicar.")
             return
@@ -228,9 +232,14 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(new_dir, ignore_errors=True)
 
     def _open_naming_dialog(self):
-        if not self.active_model_name:
+        # [FIX] Fonte da verdade é a UI
+        current_model_name = self.preview_panel.cbo_models.currentText()
+        if not current_model_name:
             QMessageBox.warning(self, "Atenção", "Selecione um modelo primeiro.")
             return
+            
+        # Garante que active_model_name esteja sincronizado caso precise dele depois
+        self.active_model_name = current_model_name
 
         # 1. Recupera Variáveis
         cols = self.table_panel.table.columnCount()
@@ -291,7 +300,13 @@ class MainWindow(QMainWindow):
             self.log_panel.append("AVISO: A tabela está vazia. Nada a gerar.")
             return
 
-        slug = slugify_model_name(self.active_model_name)
+        # [FIX] Obtém o nome real da UI no momento do clique
+        current_name = self.preview_panel.cbo_models.currentText()
+        if not current_name:
+            self.log_panel.append("ERRO: Nenhum modelo selecionado.")
+            return
+            
+        slug = slugify_model_name(current_name)
         template_path = Path("models") / slug / "template_v3.json"
 
         if not template_path.exists():
@@ -416,14 +431,20 @@ class MainWindow(QMainWindow):
         self.table_panel.table.setRowCount(1)
 
     def _open_model_dialog(self):
-        if not self.active_model_name:
+        # [FIX] Fonte da verdade é a UI
+        current_model_name = self.preview_panel.cbo_models.currentText()
+        
+        if not current_model_name:
             QMessageBox.warning(self, "Atenção", "Selecione um modelo na lista antes de configurar.")
             return
+            
+        # Sincroniza a variável de cache apenas para garantir
+        self.active_model_name = current_model_name
 
         self.editor_window = EditorWindow(self)
         self.editor_window.modelSaved.connect(self._on_editor_saved)
 
-        slug = slugify_model_name(self.active_model_name)
+        slug = slugify_model_name(current_model_name)
         json_path = Path("models") / slug / "template_v3.json"
 
         if json_path.exists():
@@ -455,14 +476,28 @@ class MainWindow(QMainWindow):
 
         self.preview_panel.cbo_models.blockSignals(False)
 
+        self.preview_panel.cbo_models.blockSignals(False) # Destrava sinais
+
+        # Lógica de Seleção Robusta
+        target_index = 0 # Padrão: primeiro item
+        
         if select_name:
             idx = self.preview_panel.cbo_models.findText(select_name)
             if idx >= 0:
-                self.preview_panel.cbo_models.setCurrentIndex(idx)
-                return
+                target_index = idx
 
         if self.preview_panel.cbo_models.count() > 0:
-            self.preview_panel.cbo_models.setCurrentIndex(0)
+            self.preview_panel.cbo_models.setCurrentIndex(target_index)
+            
+            # [FIX CRÍTICO] Força a atualização manual.
+            # Às vezes o 'setCurrentIndex' não dispara o sinal se o índice numérico
+            # não mudou (ex: era 0, limpou, encheu, virou 0 de novo).
+            # Chamamos explicitamente para garantir que o Preview e o 'active_model_name' atualizem.
+            current_text = self.preview_panel.cbo_models.itemText(target_index)
+            self._on_model_changed(current_text)
+        else:
+            # Lista vazia? Limpa o preview
+            self._on_model_changed("")
 
     def _on_add_model(self):
         self.editor_window = EditorWindow(self)
