@@ -2,7 +2,7 @@
 from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                 QSplitter, QPushButton, QApplication, QMessageBox,
-                                  QLineEdit, QLabel, QFileDialog, QProgressBar) # <--- QProgressBar Adicionado
+                                  QLineEdit, QLabel, QFileDialog, QProgressBar)
 from PySide6.QtCore import Qt, QSettings
 
 from ui.preview_panel import PreviewPanel
@@ -11,7 +11,8 @@ from ui.log_panel import LogPanel
 from ui.table_panel import TablePanel
 from core.renderer_v3 import NativeRenderer
 from ui.editor.editor_window import EditorWindow
-from core.worker import RenderWorker  # <--- Importamos o Worker
+# [MUDANÇA] Importamos o Gerente
+from core.worker import RenderManager  
 from core.template_v2 import slugify_model_name
 import json
 
@@ -31,7 +32,7 @@ class MainWindow(QMainWindow):
         root.addWidget(splitter)
 
         self.current_output_pattern = "cartao_{nome}"
-        self.worker = None # Variável para segurar o processo em background
+        self.manager = None # [MUDANÇA] Renomeado de worker para manager
 
         # --- Painel ESQUERDO ---
         left = QWidget()
@@ -49,13 +50,12 @@ class MainWindow(QMainWindow):
         left_stack.addWidget(self.controls_panel, 0)
         left_stack.addWidget(self.log_panel, 3)
 
-        # --- BARRA DE PROGRESSO (A "Barra Fina") ---
+        # --- BARRA DE PROGRESSO ---
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(8)  # Bem fina (8px)
-        self.progress_bar.setTextVisible(False) # Sem texto dentro (só visual)
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        # Estilo: Fundo cinza escuro, Preenchimento verde
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 border: none;
@@ -69,7 +69,7 @@ class MainWindow(QMainWindow):
         """)
         left_stack.addWidget(self.progress_bar, 0)
 
-        # --- Seletor de Pasta de Saída ---
+        # --- Seletor de Pasta ---
         grp_out = QWidget()
         ly_out = QHBoxLayout(grp_out)
         ly_out.setContentsMargins(0, 0, 0, 0)
@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
 
         self.btn_generate_cards = QPushButton("Gerar cartões")
         self.btn_generate_cards.setMinimumHeight(44)
-        self.btn_generate_cards.clicked.connect(self._generate_cards_async) # <--- Nova função async
+        self.btn_generate_cards.clicked.connect(self._generate_cards_async)
         left_stack.addWidget(self.btn_generate_cards, 0)
 
         # --- Painel DIREITO ---
@@ -119,13 +119,14 @@ class MainWindow(QMainWindow):
             self.txt_output_path.setText(str(last_output))
 
     def _generate_cards_async(self):
-        """Inicia o processo em background (sem travar a tela)."""
-        # 1. Validações Iniciais
+        """Inicia o processo em background via Manager."""
+        # 1. Scrape dos dados
         rows_plain, rows_rich = self._scrape_table_data()
         if not rows_plain:
             self.log_panel.append("AVISO: A tabela está vazia. Nada a gerar.")
             return
 
+        # 2. Caminho do Modelo
         slug = slugify_model_name(self.active_model_name)
         template_path = Path("models") / slug / "template_v3.json"
 
@@ -133,10 +134,10 @@ class MainWindow(QMainWindow):
             self.log_panel.append(f"ERRO: Modelo '{self.active_model_name}' não encontrado.")
             return
 
-        # 2. Prepara Dados e Renderer
+        # 3. Carrega Template e Renderer
         with open(template_path, "r", encoding="utf-8") as f:
             tpl_data = json.load(f)
-            # Resolve paths absolutos (igual fazíamos antes)
+            # Resolve caminhos absolutos
             model_dir = template_path.parent
             if tpl_data.get("background_path") and not Path(tpl_data["background_path"]).is_absolute():
                 tpl_data["background_path"] = str(model_dir / tpl_data["background_path"])
@@ -146,7 +147,7 @@ class MainWindow(QMainWindow):
 
         renderer = NativeRenderer(tpl_data)
 
-        # 3. Define Output
+        # 4. Define Output
         custom_path = self.txt_output_path.text().strip()
         if custom_path:
             output_dir = Path(custom_path)
@@ -155,34 +156,30 @@ class MainWindow(QMainWindow):
             output_dir = Path("output") / slug
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 4. Configura UI para o estado "Processando"
+        # 5. UI Update
         self.btn_generate_cards.setEnabled(False)
         self.btn_generate_cards.setText("Gerando... (Aguarde)")
         self.progress_bar.setValue(0)
         self.log_panel.append(f"--- Iniciando lote de {len(rows_plain)} cartões ---")
 
-        # 5. Lança o Worker Thread
-        self.worker = RenderWorker(renderer, rows_plain, rows_rich, output_dir, self.current_output_pattern)
+        # 6. Inicia o Manager [MUDANÇA PRINCIPAL]
+        self.manager = RenderManager(renderer, rows_plain, rows_rich, output_dir, self.current_output_pattern)
         
-        # Conecta os sinais do worker aos métodos da janela
-        self.worker.progress_updated.connect(self.progress_bar.setValue)
-        self.worker.log_updated.connect(self.log_panel.append)
-        self.worker.error_occurred.connect(lambda msg: self.log_panel.append(f"[ERRO] {msg}"))
-        self.worker.finished_process.connect(self._on_generation_finished)
+        self.manager.progress_updated.connect(self.progress_bar.setValue)
+        self.manager.log_updated.connect(self.log_panel.append)
+        self.manager.error_occurred.connect(lambda msg: self.log_panel.append(f"[ERRO] {msg}"))
+        self.manager.finished_process.connect(self._on_generation_finished)
         
-        self.worker.start()
+        self.manager.start()
 
     def _on_generation_finished(self):
-        """Chamado quando o worker termina (com sucesso ou erro)."""
+        """Chamado quando TODOS os cartões terminarem."""
         self.btn_generate_cards.setEnabled(True)
         self.btn_generate_cards.setText("Gerar cartões")
-        self.progress_bar.setValue(100) # Garante que encheu
-        self.log_panel.append("=== Processo Finalizado ===")
-        
-        # Opcional: Mostra alerta visual
-        # QMessageBox.information(self, "Concluído", "Geração de cartões finalizada!")
+        self.log_panel.append("=== Processo Multi-Thread Finalizado ===")
+        # self.progress_bar.setValue(0) # Opcional: resetar barra
 
-    # --- Métodos Auxiliares Mantidos Iguais ---
+    # --- Restante dos métodos inalterados ---
     def _on_model_changed(self, name: str):
         self.preview_panel.set_preview_text(f"Prévia do modelo selecionado:\n{name}")
         self.log_panel.append(f"Modelo ativo: {name}")
