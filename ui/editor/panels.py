@@ -172,26 +172,14 @@ class EditorDeTextoPanel(QWidget):
         self.btn_underline.blockSignals(False)
 
     def set_font_family(self, font):
-        cursor = self.txt_content.textCursor()
-        if not cursor.hasSelection():
-            cursor.select(QTextCursor.SelectionType.Document)
-        
-        fmt = QTextCharFormat()
-        fmt.setFontFamily(font.family())
-        cursor.mergeCharFormat(fmt)
-        self.txt_content.setFocus()
+        # Não altera o QTextEdit; só avisa o canvas
         self.fontFamilyChanged.emit(font)
+        self.txt_content.setFocus()
 
     def set_font_size(self, size):
-        cursor = self.txt_content.textCursor()
-        if not cursor.hasSelection():
-            cursor.select(QTextCursor.SelectionType.Document)
-        
-        fmt = QTextCharFormat()
-        fmt.setFontPointSize(size)
-        cursor.mergeCharFormat(fmt)
-        self.txt_content.setFocus()
+        # Não altera o QTextEdit; só avisa o canvas
         self.fontSizeChanged.emit(size)
+        self.txt_content.setFocus()
 
     def set_format_attribute(self, attr_type):
         cursor = self.txt_content.textCursor()
@@ -216,67 +204,65 @@ class EditorDeTextoPanel(QWidget):
 
     def load_from_item(self, box: DesignerBox):
         # 1. Bloqueios
-        self.blockSignals(True) 
+        self.blockSignals(True)
         self.txt_content.blockSignals(True)
 
         # 2. Carrega o HTML original e a Fonte Real (do Item)
         html = box.text_item.toHtml()
         real_font = box.text_item.font()
-        
-        self.txt_content.setHtml(html)
 
-        # [UX] FORMATAÇÃO VISUAL DO EDITOR (Desacoplada)
-        # Aqui forçamos o editor a mostrar sempre uma fonte confortável (Ex: Segoe UI, 11pt)
-        # Isso NÃO altera o cartão, pois filtraremos isso no '_emit_clean_html'.
+        # 3) Mostra no editor uma versão "neutra" (sem fonte/tamanho)
+        ui_html = re.sub(r"font-family:[^;\"']+(;)?", "", html)
+        ui_html = re.sub(r"font-size:[^;\"']+(;)?", "", ui_html)
+
+        self.txt_content.setHtml(ui_html)
+
+        # 4) Define fonte/tamanho visual do QTextEdit (somente UI)
+        self.txt_content.setFont(QFont("Segoe UI", 11))
+
+        # (opcional) coloca cursor no final, sem mexer em formatação
         cursor = self.txt_content.textCursor()
-        cursor.select(QTextCursor.SelectionType.Document)
-
-        fmt_ui = QTextCharFormat()
-        fmt_ui.setFontFamily("Segoe UI") # Fonte de sistema limpa
-        fmt_ui.setFontPointSize(11)      # Tamanho fixo legível
-        # Mantemos peso/itálico/sublinhado para feedback visual semântico
-        fmt_ui.setFontWeight(real_font.weight())
-        fmt_ui.setFontItalic(real_font.italic())
-        fmt_ui.setFontUnderline(real_font.underline())
-        
-        cursor.mergeCharFormat(fmt_ui)
-        cursor.clearSelection()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.txt_content.setTextCursor(cursor)
 
-        # 3. Atualiza os CONTROLES com a Fonte REAL (do Item)
-        # O usuário vê "Arial 50" nos combos, mas lê "Segoe 11" na caixa de texto.
+        # 5. Atualiza os CONTROLES com a Fonte REAL (do Item)
         self.cbo_font.setCurrentFont(real_font)
         self.spin_size.setValue(int(real_font.pointSize()))
         self.btn_bold.setChecked(real_font.bold())
         self.btn_italic.setChecked(real_font.italic())
         self.btn_underline.setChecked(real_font.underline())
-        
-        # 4. Atualiza Alinhamentos (Horizontal)
+
+        # 6. Atualiza Alinhamentos (Horizontal)
         opt = box.text_item.document().defaultTextOption()
         align = opt.alignment()
-        if align & Qt.AlignmentFlag.AlignRight: self.cbo_align.setCurrentIndex(2)
-        elif align & Qt.AlignmentFlag.AlignCenter: self.cbo_align.setCurrentIndex(1)
-        elif align & Qt.AlignmentFlag.AlignJustify: self.cbo_align.setCurrentIndex(3)
-        else: self.cbo_align.setCurrentIndex(0)
+        if align & Qt.AlignmentFlag.AlignRight:
+            self.cbo_align.setCurrentIndex(2)
+        elif align & Qt.AlignmentFlag.AlignCenter:
+            self.cbo_align.setCurrentIndex(1)
+        elif align & Qt.AlignmentFlag.AlignJustify:
+            self.cbo_align.setCurrentIndex(3)
+        else:
+            self.cbo_align.setCurrentIndex(0)
 
-        # 5. Atualiza Alinhamentos (Vertical)
+        # 7. Atualiza Alinhamentos (Vertical)
         v_idx = 0
-        if box.vertical_align == "center": v_idx = 1
-        elif box.vertical_align == "bottom": v_idx = 2
+        if box.vertical_align == "center":
+            v_idx = 1
+        elif box.vertical_align == "bottom":
+            v_idx = 2
         self.cbo_valign.setCurrentIndex(v_idx)
-        
-        # 6. Atualiza Espaçamentos
+
+        # 8. Atualiza Espaçamentos (só controles, não aplica no editor)
         cursor_block = QTextCursor(box.text_item.document())
         fmt_block = cursor_block.blockFormat()
         self.spin_indent.setValue(fmt_block.textIndent())
-        
+
         if fmt_block.lineHeightType() == 1:
             self.spin_lh.setValue(fmt_block.lineHeight() / 100.0)
         else:
             self.spin_lh.setValue(1.15)
 
-        # 7. Libera
+        # 9. Libera
         self.txt_content.blockSignals(False)
         self.blockSignals(False)
 

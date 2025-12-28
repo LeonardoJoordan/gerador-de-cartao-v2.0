@@ -363,6 +363,7 @@ class EditorWindow(QMainWindow):
             f = box.text_item.font()
             f.setFamily(font.family())
             box.text_item.setFont(f)
+            box.text_item.document().setDefaultFont(f)
 
     def update_font_size(self, size):
         box = self._get_selected()
@@ -370,6 +371,7 @@ class EditorWindow(QMainWindow):
             f = box.text_item.font()
             f.setPointSize(size)
             box.text_item.setFont(f)
+            box.text_item.document().setDefaultFont(f) 
 
     def update_width(self, width):
         box = self._get_selected()
