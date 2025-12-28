@@ -168,5 +168,10 @@
             "line_height": 1.15
         }
     ],
-    "output_suffix": "{postgrad}_{nome}"
+    "output_suffix": "{postgrad}_{nome}",
+    "imposition_settings": {
+        "enabled": false,
+        "target_w_mm": 130.0,
+        "target_h_mm": 92.2
+    }
 }

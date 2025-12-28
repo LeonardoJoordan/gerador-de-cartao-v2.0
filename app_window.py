@@ -231,35 +231,58 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Atenção", "Selecione um modelo primeiro.")
             return
 
+        # 1. Recupera Variáveis
         cols = self.table_panel.table.columnCount()
         vars_available = [self.table_panel.table.horizontalHeaderItem(c).text() for c in range(cols)]
         
         slug = slugify_model_name(self.active_model_name)
         
-        dlg = NamingDialog(self, slug, vars_available, self.current_filename_suffix)
+        # 2. Recupera Dados do Modelo (Dimensões e Config Atual)
+        current_imposition = None
+        model_size = (1000, 1000) # Default seguro
+
+        if self.cached_model_data:
+            sz = self.cached_model_data.get("canvas_size", {})
+            model_size = (sz.get("w", 1000), sz.get("h", 1000))
+            current_imposition = self.cached_model_data.get("imposition_settings") # Lê config salva
+
+        # 3. Abre Dialog
+        dlg = NamingDialog(self, slug, vars_available, self.current_filename_suffix, 
+                           model_size_px=model_size, 
+                           current_imposition=current_imposition)
+        
         if dlg.exec():
             new_suffix = dlg.get_pattern()
+            new_imposition = dlg.get_imposition_settings() # Pega novos settings
+            
             self.current_filename_suffix = new_suffix
             
-            # [NOVO] Persistir a configuração no JSON do modelo
+            # 4. Salvar tudo no JSON do modelo
             json_path = Path("models") / slug / "template_v3.json"
             if json_path.exists():
                 try:
                     with open(json_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     
-                    data["output_suffix"] = new_suffix  # <--- Salvamos aqui
+                    data["output_suffix"] = new_suffix
+                    data["imposition_settings"] = new_imposition # Salva a nova seção
                     
+                    # Atualiza o cache em memória também
+                    if self.cached_model_data:
+                        self.cached_model_data["output_suffix"] = new_suffix
+                        self.cached_model_data["imposition_settings"] = new_imposition
+
                     with open(json_path, "w", encoding="utf-8") as f:
                         json.dump(data, f, indent=4, ensure_ascii=False)
                 except Exception as e:
-                    print(f"Erro ao salvar config de nome: {e}")
+                    print(f"Erro ao salvar config: {e}")
 
             # Feedback no log
+            msg_imp = " [Imposição A4 ATIVADA]" if new_imposition["enabled"] else ""
             if self.current_filename_suffix:
-                self.log_panel.append(f"Padrão salvo: {slug}_{self.current_filename_suffix}.png")
+                self.log_panel.append(f"Configuração salva: {slug}_{self.current_filename_suffix}.png{msg_imp}")
             else:
-                self.log_panel.append(f"Padrão salvo: Sequencial automático ({slug}_01.png)")
+                self.log_panel.append(f"Configuração salva: Sequencial automático{msg_imp}")
 
     def _generate_cards_async(self):
         rows_plain, rows_rich = self._scrape_table_data()
@@ -303,7 +326,17 @@ class MainWindow(QMainWindow):
         else:
             full_pattern = slug
 
-        self.manager = RenderManager(renderer, rows_plain, rows_rich, output_dir, full_pattern)
+        # Recupera config de imposição (se existir)
+        imposition_cfg = self.cached_model_data.get("imposition_settings", None)
+
+        self.manager = RenderManager(
+            renderer, 
+            rows_plain, 
+            rows_rich, 
+            output_dir, 
+            full_pattern,
+            imposition_settings=imposition_cfg
+        )
         
         self.manager.progress_updated.connect(self.progress_bar.setValue)
         self.manager.log_updated.connect(self.log_panel.append)

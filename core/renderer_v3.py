@@ -45,6 +45,21 @@ class NativeRenderer:
 
         image.save(str(out_path), "PNG")
 
+    def render_to_qimage(self, row_plain: dict, row_rich: dict) -> QImage:
+        """Renderiza e retorna QImage em memória (para imposição)."""
+        w = self.tpl["canvas_size"]["w"]
+        h = self.tpl["canvas_size"]["h"]
+        
+        image = QImage(w, h, QImage.Format_ARGB32)
+        image.fill(Qt.GlobalColor.white)
+
+        painter = QPainter(image)
+        try:
+            self._paint_card(painter, row_rich)
+        finally:
+            painter.end()
+        return image
+
     def _paint_card(self, painter: QPainter, row_rich: dict):
         """Desenha as camadas do cartão."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
