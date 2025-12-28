@@ -1,5 +1,5 @@
 {
-    "name": "Cartão teste",
+    "name": "Promoção",
     "canvas_size": {
         "w": 1748,
         "h": 1240
@@ -167,6 +167,5 @@
             "indent_px": 0,
             "line_height": 1.15
         }
-    ],
-    "output_suffix": "{postgrad}_{nome}"
+    ]
 }

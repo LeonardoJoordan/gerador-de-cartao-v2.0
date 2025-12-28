@@ -1,8 +1,11 @@
 # app_window.py
 from pathlib import Path
+import shutil
+import json
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                 QSplitter, QPushButton, QApplication, QMessageBox,
-                                  QLineEdit, QLabel, QFileDialog, QProgressBar)
+                                  QLineEdit, QLabel, QFileDialog, QProgressBar,
+                                  QInputDialog) # <--- Certifique-se que QInputDialog está aqui
 from PySide6.QtCore import Qt, QSettings
 
 from ui.preview_panel import PreviewPanel
@@ -13,9 +16,7 @@ from core.renderer_v3 import NativeRenderer
 from ui.editor.editor_window import EditorWindow
 from core.worker import RenderManager
 from core.template_v2 import slugify_model_name
-# [NOVO] Importação do Diálogo
 from ui.naming_dialog import NamingDialog
-import json
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -32,12 +33,12 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(splitter)
 
-        # [MUDANÇA] Guarda apenas o sufixo customizado (o prefixo vem do modelo)
         self.current_filename_suffix = "" 
         self.manager = None 
 
         # --- Painel ESQUERDO ---
         left = QWidget()
+        left.setMinimumWidth(620)
         splitter.addWidget(left)
 
         left_stack = QVBoxLayout(left)
@@ -61,7 +62,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 border: none;
-                background-color: #e0e0e0;
+                background-color: transparent; /* Fundo transparente (mesma cor do app) */
                 border-radius: 4px;
             }
             QProgressBar::chunk {
@@ -71,7 +72,7 @@ class MainWindow(QMainWindow):
         """)
         left_stack.addWidget(self.progress_bar, 0)
 
-        # --- Seletor de Pasta e Configuração de Nome ---
+        # --- Seletor de Pasta ---
         grp_out = QWidget()
         ly_out = QHBoxLayout(grp_out)
         ly_out.setContentsMargins(0, 0, 0, 0)
@@ -83,14 +84,12 @@ class MainWindow(QMainWindow):
         self.txt_output_path.setPlaceholderText("Padrão: ./output/nome_do_modelo")
         ly_out.addWidget(self.txt_output_path)
 
-        # Botão Pasta
         self.btn_sel_out = QPushButton("...")
         self.btn_sel_out.setFixedWidth(40)
         self.btn_sel_out.setToolTip("Selecionar pasta de destino")
         self.btn_sel_out.clicked.connect(self._select_output_folder)
         ly_out.addWidget(self.btn_sel_out)
 
-        # [NOVO] Botão Engrenagem (Configurar Nomenclatura)
         self.btn_config_name = QPushButton("⚙️")
         self.btn_config_name.setFixedWidth(40)
         self.btn_config_name.setToolTip("Configurar padrão de nome dos arquivos")
@@ -108,8 +107,8 @@ class MainWindow(QMainWindow):
         self.table_panel = TablePanel()
         splitter.addWidget(self.table_panel)
 
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 6)
+        splitter.setSizes([620, 820])
+        splitter.setCollapsible(0, False)
 
         self.cached_model_data = None
         
@@ -121,8 +120,11 @@ class MainWindow(QMainWindow):
         self.preview_panel.cbo_models.currentTextChanged.connect(self._on_model_changed)
         self.table_panel.table.itemSelectionChanged.connect(self._on_table_selection)
 
+        # --- Conexões dos Botões de Controle ---
         self.controls_panel.btn_add_model.clicked.connect(self._on_add_model)
+        self.controls_panel.btn_duplicate_model.clicked.connect(self._on_duplicate_model)
         self.controls_panel.btn_remove_model.clicked.connect(self._on_remove_model)
+        self.controls_panel.btn_rename_model.clicked.connect(self._on_rename_model) # [NOVO]
         self.controls_panel.btn_config_model.clicked.connect(self._open_model_dialog)
 
         self.settings = QSettings("AutoMakeCard", "MainApp")
@@ -130,13 +132,105 @@ class MainWindow(QMainWindow):
         if last_output:
             self.txt_output_path.setText(str(last_output))
 
+    # --- [NOVO] Lógica de Renomear ---
+    def _on_rename_model(self):
+        old_name = self.active_model_name
+        if not old_name:
+            QMessageBox.warning(self, "Atenção", "Selecione um modelo para renomear.")
+            return
+
+        # 1. Pede o novo nome
+        new_name, ok = QInputDialog.getText(self, "Renomear Modelo", "Novo nome:", text=old_name)
+        if not ok or not new_name.strip():
+            return
+        
+        new_name = new_name.strip()
+        if new_name == old_name:
+            return
+
+        # 2. Prepara caminhos
+        old_slug = slugify_model_name(old_name)
+        new_slug = slugify_model_name(new_name)
+        
+        old_dir = Path("models") / old_slug
+        new_dir = Path("models") / new_slug
+
+        if new_dir.exists():
+            QMessageBox.warning(self, "Erro", f"Já existe um modelo com o slug '{new_slug}'.")
+            return
+
+        try:
+            # 3. Renomeia a pasta
+            old_dir.rename(new_dir)
+            
+            # 4. Atualiza o JSON interno (senão o nome antigo continua aparecendo na lista)
+            json_path = new_dir / "template_v3.json"
+            if json_path.exists():
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                data["name"] = new_name
+                
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+            
+            self.log_panel.append(f"Modelo renomeado: '{old_name}' -> '{new_name}'")
+            
+            # 5. Recarrega interface
+            self._reload_models_from_disk(select_name=new_name)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao renomear: {e}")
+
+    # --- Métodos Existentes (Duplicar, Adicionar, etc) ---
+    def _on_duplicate_model(self):
+        original_name = self.active_model_name
+        if not original_name:
+            QMessageBox.warning(self, "Atenção", "Selecione um modelo para duplicar.")
+            return
+
+        original_slug = slugify_model_name(original_name)
+        original_dir = Path("models") / original_slug
+
+        if not original_dir.exists():
+            self.log_panel.append("ERRO: Pasta do modelo original não encontrada.")
+            return
+
+        counter = 1
+        while True:
+            suffix = " (Cópia)" if counter == 1 else f" (Cópia {counter})"
+            new_name = f"{original_name}{suffix}"
+            new_slug = slugify_model_name(new_name)
+            new_dir = Path("models") / new_slug
+            
+            if not new_dir.exists():
+                break
+            counter += 1
+
+        try:
+            shutil.copytree(original_dir, new_dir)
+            
+            json_path = new_dir / "template_v3.json"
+            if json_path.exists():
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data["name"] = new_name
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+
+            self.log_panel.append(f"Modelo duplicado: '{new_name}'")
+            self._reload_models_from_disk(select_name=new_name)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao duplicar modelo:\n{e}")
+            if new_dir.exists():
+                shutil.rmtree(new_dir, ignore_errors=True)
+
     def _open_naming_dialog(self):
-        """Abre o diálogo para configurar o sufixo do nome do arquivo."""
         if not self.active_model_name:
             QMessageBox.warning(self, "Atenção", "Selecione um modelo primeiro.")
             return
 
-        # Coleta variáveis da tabela (cabeçalhos)
         cols = self.table_panel.table.columnCount()
         vars_available = [self.table_panel.table.horizontalHeaderItem(c).text() for c in range(cols)]
         
@@ -144,13 +238,28 @@ class MainWindow(QMainWindow):
         
         dlg = NamingDialog(self, slug, vars_available, self.current_filename_suffix)
         if dlg.exec():
-            self.current_filename_suffix = dlg.get_pattern()
+            new_suffix = dlg.get_pattern()
+            self.current_filename_suffix = new_suffix
             
+            # [NOVO] Persistir a configuração no JSON do modelo
+            json_path = Path("models") / slug / "template_v3.json"
+            if json_path.exists():
+                try:
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    
+                    data["output_suffix"] = new_suffix  # <--- Salvamos aqui
+                    
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=4, ensure_ascii=False)
+                except Exception as e:
+                    print(f"Erro ao salvar config de nome: {e}")
+
             # Feedback no log
             if self.current_filename_suffix:
-                self.log_panel.append(f"Padrão de nome alterado: {slug}_{self.current_filename_suffix}.png")
+                self.log_panel.append(f"Padrão salvo: {slug}_{self.current_filename_suffix}.png")
             else:
-                self.log_panel.append(f"Padrão de nome: Sequencial ({slug}_01.png)")
+                self.log_panel.append(f"Padrão salvo: Sequencial automático ({slug}_01.png)")
 
     def _generate_cards_async(self):
         rows_plain, rows_rich = self._scrape_table_data()
@@ -189,9 +298,6 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.log_panel.append(f"--- Iniciando lote de {len(rows_plain)} cartões ---")
 
-        # [LÓGICA DE NOMECLATURA]
-        # Se usuário definiu sufixo: modelo_{sufixo}
-        # Se não: modelo (e o sistema adiciona _01, _02...)
         if self.current_filename_suffix:
             full_pattern = f"{slug}_{self.current_filename_suffix}"
         else:
@@ -211,14 +317,10 @@ class MainWindow(QMainWindow):
         self.btn_generate_cards.setText("Gerar cartões")
         self.log_panel.append("=== Processo Multi-Thread Finalizado ===")
 
-    # --- Métodos Auxiliares Mantidos ---
     def _on_model_changed(self, name: str):
         self.preview_panel.set_preview_text(f"Prévia do modelo selecionado:\n{name}")
         self.log_panel.append(f"Modelo ativo: {name}")
         self.active_model_name = name
-        
-        # [NOVO] Reseta o padrão de nome customizado ao trocar de modelo
-        # para evitar usar variáveis que não existem no novo modelo
         self.current_filename_suffix = ""
 
         if not name: return
@@ -230,6 +332,12 @@ class MainWindow(QMainWindow):
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    
+                    # [NOVO] Recupera o padrão de nome salvo
+                    self.current_filename_suffix = data.get("output_suffix", "")
+                    if self.current_filename_suffix:
+                         # Feedback visual discreto no log opcional
+                         pass 
                     
                     model_dir = json_path.parent
                     if data.get("background_path") and not Path(data["background_path"]).is_absolute():
