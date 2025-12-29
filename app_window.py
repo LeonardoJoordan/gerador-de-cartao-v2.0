@@ -2,6 +2,7 @@
 from pathlib import Path
 import shutil
 import json
+from datetime import datetime
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                 QSplitter, QPushButton, QApplication, QMessageBox,
                                   QLineEdit, QLabel, QFileDialog, QProgressBar,
@@ -326,11 +327,19 @@ class MainWindow(QMainWindow):
 
         custom_path = self.txt_output_path.text().strip()
         if custom_path:
-            output_dir = Path(custom_path)
+            base_dir = Path(custom_path)
             self.settings.setValue("last_output_dir", custom_path)
         else:
-            output_dir = Path("output") / slug
+            base_dir = Path("output") / slug
+
+        # [NOVO] Cria subpasta: Lote_AA.MM.DD_HH.MM.SS
+        timestamp = datetime.now().strftime("%y.%m.%d_%H.%M.%S")
+        folder_name = f"Lote_{timestamp}"
+        
+        output_dir = base_dir / folder_name
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.log_panel.append(f"📂 Salvando em: {folder_name}")
 
         self.btn_generate_cards.setEnabled(False)
         self.btn_generate_cards.setText("Gerando... (Aguarde)")
