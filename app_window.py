@@ -621,7 +621,6 @@ class MainWindow(QMainWindow):
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         
         # [CORREÇÃO] Auto-detectar orientação baseada na primeira folha gerada
-        # Isso impede que uma folha Paisagem seja "espremida" numa impressão Retrato
         if files_to_print:
             first_img_path = self.manager.output_dir / files_to_print[0]
             if first_img_path.exists():
@@ -631,6 +630,10 @@ class MainWindow(QMainWindow):
                         printer.setPageOrientation(QPageLayout.Orientation.Landscape)
                     else:
                         printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+
+        # [CRÍTICO] Força o modo "Full Page" para permitir impressão 1:1 (Sem Escala)
+        # Isso diz ao Qt para considerar as coordenadas do papel inteiro, inclusive as bordas não imprimíveis.
+        printer.setFullPage(True)
 
         dialog = QPrintDialog(printer, self)
         
@@ -665,11 +668,11 @@ class MainWindow(QMainWindow):
                     self.log_panel.append(f"❌ Falha ao ler imagem: {filename}")
                     continue
 
-                # Desenha na folha (ocupa a folha toda, assumindo A4 configurado no driver)
-                # O QPainter desenha pixels. Se a imagem é 300DPI e a impressora 600DPI,
-                # o driver geralmente ajusta, mas podemos garantir desenhando no rect da página.
-                page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
-                painter.drawImage(page_rect, img)
+                # [CORREÇÃO ESCALA] Desenha usando o paperRect (Papel Físico) e não pageRect (Área Imprimível).
+                # Isso garante que 1mm na imagem seja 1mm no papel, cortando as margens físicas se necessário,
+                # mas sem distorcer ou encolher o conteúdo central.
+                paper_rect = printer.paperRect(QPrinter.Unit.DevicePixel)
+                painter.drawImage(paper_rect, img)
                 
             self.log_panel.append("✅ Envio para impressão concluído!")
             
