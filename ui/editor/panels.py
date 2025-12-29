@@ -183,23 +183,29 @@ class EditorDeTextoPanel(QWidget):
 
     def set_format_attribute(self, attr_type):
         cursor = self.txt_content.textCursor()
-        if not cursor.hasSelection():
-            cursor.select(QTextCursor.SelectionType.Document)
 
-        fmt = cursor.charFormat()
+        # Se não houver seleção, aplica na palavra sob o cursor (comportamento atual)
+        if not cursor.hasSelection():
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+
+        # Em vez de "adivinhar" o estado pelo charFormat (bug em seleção mista),
+        # aplicamos diretamente o estado do botão (checked = liga, unchecked = desliga).
+        fmt = QTextCharFormat()
 
         if attr_type == "bold":
-            is_bold = fmt.fontWeight() == QFont.Weight.Bold
-            new_weight = QFont.Weight.Normal if is_bold else QFont.Weight.Bold
-            fmt.setFontWeight(new_weight)
-        
-        elif attr_type == "italic":
-            fmt.setFontItalic(not fmt.fontItalic())
-            
-        elif attr_type == "underline":
-            fmt.setFontUnderline(not fmt.fontUnderline())
+            desired_on = self.btn_bold.isChecked()
+            fmt.setFontWeight(QFont.Weight.Bold if desired_on else QFont.Weight.Normal)
 
-        cursor.setCharFormat(fmt)
+        elif attr_type == "italic":
+            desired_on = self.btn_italic.isChecked()
+            fmt.setFontItalic(desired_on)
+
+        elif attr_type == "underline":
+            desired_on = self.btn_underline.isChecked()
+            fmt.setFontUnderline(desired_on)
+
+        cursor.mergeCharFormat(fmt)
+        self.txt_content.mergeCurrentCharFormat(fmt)
         self.txt_content.setFocus()
 
     def load_from_item(self, box: DesignerBox):
