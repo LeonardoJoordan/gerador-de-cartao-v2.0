@@ -3,8 +3,10 @@
 import json
 from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QWidget, 
                                QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, 
-                               QMessageBox, QInputDialog, QListWidget, QAbstractItemView)
-from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction, QTextCursor, QTextCharFormat
+                               QMessageBox, QInputDialog, QListWidget, QAbstractItemView,
+                               QListWidgetItem)
+from PySide6.QtGui import (QPainter, QBrush, QPen, QColor, QAction, QShortcut, 
+                           QKeySequence, QTextCursor, QTextCharFormat)
 from PySide6.QtCore import Qt, Signal, QEvent
 from pathlib import Path
 import shutil
@@ -26,6 +28,23 @@ class EditorWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
+
+        # --- 0. PAINEL ESQUERDO (CAMADAS) ---
+        left_container = QWidget()
+        left_container.setFixedWidth(220)
+        left_layout = QVBoxLayout(left_container)
+        
+        # Título
+        lbl_layers = QLabel("<b>CAMADAS</b>")
+        left_layout.addWidget(lbl_layers)
+
+        # A Lista
+        self.layer_list = QListWidget()
+        # [SIMPLIFICAÇÃO] Conectamos o CLIQUE do item a uma função simples
+        self.layer_list.itemClicked.connect(self._on_layer_list_clicked)
+        left_layout.addWidget(self.layer_list)
+        
+        main_layout.addWidget(left_container)
 
         # --- 1. ÁREA DE DESENHO (CENA) ---
         # Tamanho fixo inicial de 1000x1000 (será dinâmico no futuro com a imagem de fundo)
@@ -146,7 +165,7 @@ class EditorWindow(QMainWindow):
         ly_cols_compact.setSpacing(2)
         
         # [UX] Título padronizado com <b>
-        lbl_cols = QLabel("<b>ORDEM DAS CAMADAS</b>")
+        lbl_cols = QLabel("<b>ORDEM NA TABELA</b>")
         ly_cols_compact.addWidget(lbl_cols)
 
         self.lst_placeholders = QListWidget()
@@ -193,6 +212,15 @@ class EditorWindow(QMainWindow):
 
         # Conecta evento de seleção da cena
         self.scene.selectionChanged.connect(self.on_selection_changed)
+
+        self._updating_selection = False
+
+        # --- ATALHOS ---
+        self.shortcut_dup = QShortcut(QKeySequence("Ctrl+J"), self)
+        self.shortcut_dup.activated.connect(self.duplicate_selected)
+
+        self.shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut_save.activated.connect(self.export_to_json)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -328,6 +356,7 @@ class EditorWindow(QMainWindow):
         # Seleciona a nova box automaticamente
         self.scene.clearSelection()
         box.setSelected(True)
+        self.refresh_layer_list()
 
     def on_selection_changed(self):
         sel = self.scene.selectedItems()
@@ -353,6 +382,58 @@ class EditorWindow(QMainWindow):
             self.assinatura_panel.setVisible(True)
         else:
             self.assinatura_panel.setVisible(False)
+
+    def duplicate_selected(self):
+        original = self._get_selected()
+        if not original: return
+
+        # 1. Cria nova caixa com deslocamento
+        offset = 20
+        new_x = original.x() + offset
+        new_y = original.y() + offset
+        rect = original.rect()
+        
+        # Cria a nova instância
+        new_box = DesignerBox(new_x, new_y, rect.width(), rect.height(), "")
+        
+        # 2. Reseta ID (para o refresh gerar um novo)
+        new_box.layer_id = None 
+        self.scene.addItem(new_box)
+        self.refresh_layer_list()
+        
+        # 3. Copia Propriedades
+        new_box.setRotation(original.rotation())
+        new_box.vertical_align = original.vertical_align
+        new_box.update_center()
+        
+        # HTML e Estilo
+        html = original.text_item.toHtml()
+        new_box.text_item.setHtml(html)
+        
+        # Fonte Container
+        orig_font = original.text_item.font()
+        new_box.text_item.setFont(orig_font)
+        new_box.text_item.document().setDefaultFont(orig_font)
+        
+        # Bloco
+        opt = original.text_item.document().defaultTextOption()
+        new_box.text_item.document().setDefaultTextOption(opt)
+        
+        cursor = QTextCursor(original.text_item.document())
+        fmt = cursor.blockFormat()
+        new_box.set_block_format(indent=fmt.textIndent(), line_height=fmt.lineHeight()/100.0 if fmt.lineHeightType() == 1 else 1.15)
+
+        # 4. Adiciona
+        self.scene.addItem(new_box)
+        
+        # 5. Atualiza Camadas e Seleciona a nova
+        self.refresh_layer_list()
+        
+        self.scene.clearSelection()
+        new_box.setSelected(True)
+        
+        # Sincroniza lista da direita (Tabela)
+        self.sync_placeholders_list()
 
     def _get_selected(self) -> DesignerBox | None:
         sel = self.scene.selectedItems()
@@ -615,6 +696,7 @@ class EditorWindow(QMainWindow):
         self.update_text_html(html)
         # Sincroniza lista visual
         self.sync_placeholders_list()
+        self.refresh_layer_list()
 
     def load_from_json(self, file_path):
         """Carrega um modelo V3 e reconstrói o canvas."""
@@ -716,3 +798,82 @@ class EditorWindow(QMainWindow):
         self._zoom_to_fit()
 
         self.setWindowTitle(f"Editor Visual de Modelo - {data['name']}")
+        self.refresh_layer_list()
+
+    # --- SISTEMA DE CAMADAS (Helpers) ---
+    def _get_next_layer_id(self):
+        """Retorna o menor ID (0-99) disponível na cena."""
+        used = set()
+        for item in self.scene.items():
+            if hasattr(item, 'layer_id') and item.layer_id is not None:
+                used.add(item.layer_id)
+        for i in range(100):
+            if i not in used: return i
+        return 99
+
+    def _generate_layer_name(self, layer_id, item):
+        """Gera o nome visual: '01_{texto}...'"""
+        prefix = f"{layer_id:02d}"
+        
+        # Se for Caixa de Texto
+        if isinstance(item, DesignerBox):
+            raw = item.text_item.toPlainText().strip().replace("\n", " ")
+            if len(raw) > 15: raw = raw[:12] + "..."
+            if not raw: raw = "{vazio}"
+            return f"{prefix}_{raw}"
+            
+        # Se for Assinatura
+        elif isinstance(item, SignatureItem):
+            return f"{prefix}_Assinatura"
+            
+        # Se for o Fundo
+        if item == self.bg_item:
+            return f"{prefix}_Fundo"
+            
+        return f"{prefix}_Objeto"
+
+    def refresh_layer_list(self):
+        """Reconstroi a lista da esquerda (Unidirecional: Cena -> Lista)."""
+        self.layer_list.clear()
+        
+        # Pega itens da cena
+        items = self.scene.items()
+        
+        valid_items = []
+        for item in items:
+            if isinstance(item, (DesignerBox, SignatureItem)) or item == self.bg_item:
+                valid_items.append(item)
+                
+                # Garante ID se não tiver
+                if not hasattr(item, 'layer_id') or item.layer_id is None:
+                    item.layer_id = self._get_next_layer_id()
+
+        # Adiciona na lista
+        for item in valid_items:
+            name = self._generate_layer_name(item.layer_id, item)
+            list_item = QListWidgetItem(name)
+            # Guarda a referência do objeto real "escondida" no item da lista
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            self.layer_list.addItem(list_item)
+
+    def _on_layer_list_clicked(self, list_item):
+        """
+        Ao clicar na lista, selecionamos o objeto na cena.
+        Isso dispara o 'selectionChanged' da cena naturalmente,
+        o que fará o painel da direita carregar os dados.
+        """
+        target_item = list_item.data(Qt.ItemDataRole.UserRole)
+        
+        if target_item:
+            # Limpa seleção anterior da cena
+            self.scene.clearSelection()
+            
+            # Seleciona o novo item (Isso acorda o Editor da Direita)
+            target_item.setSelected(True)
+            
+            # Garante que ele esteja visível na tela (scroll)
+            self.view.ensureVisible(target_item)
+
+            # [FIX] Devolve o foco do teclado para a View imediatamente.
+            # Assim, as setas movem o objeto, e não a seleção da lista.
+            self.view.setFocus()
