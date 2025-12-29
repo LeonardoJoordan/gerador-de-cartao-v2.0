@@ -158,6 +158,14 @@ class DesignerBox(QGraphicsRectItem):
 
         self.text_item.setTextWidth(w) 
         self.text_item.setPos(0, 0)
+        
+        # [NOVO] Define o ponto de rotação inicial
+        self.update_center()
+
+    def update_center(self):
+        """Atualiza o ponto de pivô da rotação para o centro da caixa."""
+        rect = self.rect()
+        self.setTransformOriginPoint(rect.center())
 
     def set_vertical_alignment(self, align_str):
         self.vertical_align = align_str

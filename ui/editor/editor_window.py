@@ -4,7 +4,7 @@ import json
 from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, QWidget, 
                                QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, 
                                QMessageBox, QInputDialog, QListWidget, QAbstractItemView)
-from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction
+from PySide6.QtGui import QPainter, QBrush, QPen, QColor, QAction, QTextCursor, QTextCharFormat
 from PySide6.QtCore import Qt, Signal, QEvent
 from pathlib import Path
 import shutil
@@ -129,6 +129,7 @@ class EditorWindow(QMainWindow):
         self.caixa_texto_panel.setEnabled(False)
         self.caixa_texto_panel.widthChanged.connect(self.update_width)
         self.caixa_texto_panel.heightChanged.connect(self.update_height)
+        self.caixa_texto_panel.rotationChanged.connect(self.update_rotation)
         layout_misto.addWidget(self.caixa_texto_panel, 1)
 
         # 2. SEPARADOR VERTICAL
@@ -314,6 +315,14 @@ class EditorWindow(QMainWindow):
     def add_new_box(self):
         # Cria box padrão
         box = DesignerBox(350, 450, 300, 60, "{campo}")
+        
+        # [FIX] Força configuração inicial de fonte para sincronia visual imediata
+        # Garante que o objeto visual tenha a mesma fonte que será salva no JSON
+        from PySide6.QtGui import QFont
+        initial_font = QFont("Arial", 16)
+        box.text_item.setFont(initial_font)
+        box.text_item.document().setDefaultFont(initial_font)
+        
         self.scene.addItem(box)
         
         # Seleciona a nova box automaticamente
@@ -354,24 +363,53 @@ class EditorWindow(QMainWindow):
     def update_text_html(self, html_content):
         box = self._get_selected()
         if box: 
+            # 1. Guarda a fonte que o usuário escolheu (está salva no Item)
+            current_font = box.text_item.font()
+            
+            # 2. Define o HTML (Isso "reseta" o documento e mata o DefaultFont)
             box.text_item.setHtml(html_content)
+            
+            # 3. [CORREÇÃO] Restaura a fonte padrão imediatamente após o reset do HTML
+            box.text_item.document().setDefaultFont(current_font)
+            
             box.recalculate_text_position()
     
     def update_font_family(self, font):
         box = self._get_selected()
         if box:
+            # 1. Atualiza propriedades do container e padrão (para texto futuro)
             f = box.text_item.font()
             f.setFamily(font.family())
             box.text_item.setFont(f)
-            box.text_item.document().setDefaultFont(f)
+            box.text_item.document().setDefaultFont(f) 
+                        
+            cursor = QTextCursor(box.text_item.document())
+            cursor.select(QTextCursor.SelectionType.Document)
+            
+            fmt = QTextCharFormat()
+            fmt.setFontFamily(font.family())
+            
+            cursor.mergeCharFormat(fmt)
 
     def update_font_size(self, size):
         box = self._get_selected()
         if box:
+            # 1. Atualiza propriedades do container e padrão
             f = box.text_item.font()
             f.setPointSize(size)
             box.text_item.setFont(f)
-            box.text_item.document().setDefaultFont(f) 
+            box.text_item.document().setDefaultFont(f)
+                        
+            cursor = QTextCursor(box.text_item.document())
+            cursor.select(QTextCursor.SelectionType.Document)
+            
+            fmt = QTextCharFormat()
+            fmt.setFontPointSize(size) # Nota: Aqui usamos setFontPointSize, não setPointSize
+            
+            cursor.mergeCharFormat(fmt)
+            
+            # Força recálculo imediato da posição (pois mudar tamanho afeta a altura da linha)
+            box.recalculate_text_position()
 
     def update_width(self, width):
         box = self._get_selected()
@@ -379,6 +417,7 @@ class EditorWindow(QMainWindow):
             r = box.rect()
             box.setRect(0, 0, width, r.height())
             box.recalculate_text_position()
+            box.update_center() # Garante que o eixo de rotação continue no meio
 
     def update_height(self, height):
         box = self._get_selected()
@@ -386,6 +425,12 @@ class EditorWindow(QMainWindow):
             r = box.rect()
             box.setRect(0, 0, r.width(), height)
             box.recalculate_text_position()
+            box.update_center() # Garante que o eixo de rotação continue no meio
+
+    def update_rotation(self, angle):
+        box = self._get_selected()
+        if box:
+            box.setRotation(angle)
 
     def update_align(self, align_str):
         box = self._get_selected()
@@ -436,6 +481,7 @@ class EditorWindow(QMainWindow):
                     "y": int(pos.y()),
                     "w": int(r.width()),
                     "h": int(r.height()),
+                    "rotation": int(item.rotation()),
                     "font_family": item.text_item.document().defaultFont().family(),
                     "font_size": int(item.text_item.document().defaultFont().pointSize()),
                     "align": h_align,
@@ -637,6 +683,10 @@ class EditorWindow(QMainWindow):
                 box.text_item.document().setDefaultFont(default_font)
 
             box.vertical_align = b.get("vertical_align", "top")
+
+            # Aplica rotação
+            box.setRotation(b.get("rotation", 0))
+            box.update_center() # Ajusta o pivô
 
             # [FIX] Aplica o alinhamento horizontal visualmente ao carregar
             if "align" in b:

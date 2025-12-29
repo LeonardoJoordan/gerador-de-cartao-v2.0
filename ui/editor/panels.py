@@ -12,6 +12,7 @@ from .canvas_items import DesignerBox, SignatureItem
 class CaixaDeTextoPanel(QWidget):
     widthChanged = Signal(int)
     heightChanged = Signal(int)
+    rotationChanged = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -41,6 +42,14 @@ class CaixaDeTextoPanel(QWidget):
         self.spin_h.valueChanged.connect(self.heightChanged.emit)
         form.addRow("Alt:", self.spin_h)
 
+        # [NOVO] Rotação
+        self.spin_rot = QSpinBox()
+        self.spin_rot.setRange(-360, 360)
+        self.spin_rot.setSuffix(" °")
+        self.spin_rot.setWrapping(True) # Permite ir de 360 direto para 0
+        self.spin_rot.valueChanged.connect(self.rotationChanged.emit)
+        form.addRow("Rot:", self.spin_rot)
+
         layout.addLayout(form)
         layout.addStretch()
 
@@ -49,6 +58,7 @@ class CaixaDeTextoPanel(QWidget):
         rect = box.rect()
         self.spin_w.setValue(int(rect.width()))
         self.spin_h.setValue(int(rect.height()))
+        self.spin_rot.setValue(int(box.rotation()))
         self.blockSignals(False)
 
 

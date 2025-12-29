@@ -122,7 +122,13 @@ class NativeRenderer:
         
         doc = QTextDocument()
         doc.setDocumentMargin(0) # Remove margens padrão
-        doc.setDefaultStyleSheet("body { color: black; }")
+        
+        # [FIX] Injeta CSS com a fonte e tamanho do JSON no corpo do documento
+        # Isso garante que o texto seja renderizado com a fonte correta mesmo sem style inline
+        font_family = box_data.get("font_family", "Arial")
+        font_size = box_data.get("font_size", 12)
+        doc.setDefaultStyleSheet(f"body {{ color: black; font-family: '{font_family}'; font-size: {font_size}pt; }}")
+        
         doc.setHtml(html_text)
 
         # [FIX] Força o alinhamento horizontal baseado no JSON
@@ -142,6 +148,7 @@ class NativeRenderer:
         
         w = box_data.get("w", 300)
         h = box_data.get("h", 100)
+        rotation = box_data.get("rotation", 0)
         doc.setTextWidth(w)
         
         # Ajuste Vertical
@@ -152,8 +159,20 @@ class NativeRenderer:
         elif box_data.get("vertical_align") == "bottom":
             y_offset = max(0, h - content_h)
 
-        # Posicionamento e Clip
-        painter.translate(box_data.get("x", 0), box_data.get("y", 0))
+        # --- NOVA LÓGICA DE POSICIONAMENTO COM ROTAÇÃO ---
+        # 1. Translada para o centro da caixa (X + W/2, Y + H/2)
+        center_x = box_data.get("x", 0) + (w / 2)
+        center_y = box_data.get("y", 0) + (h / 2)
+        
+        painter.translate(center_x, center_y)
+        
+        # 2. Rotaciona o Canvas
+        painter.rotate(rotation)
+        
+        # 3. Translada de volta (negativo) para desenhar a partir do (0,0) local
+        painter.translate(-w / 2, -h / 2)
+        
+        # 4. Clip e Draw
         painter.setClipRect(0, 0, w, h)
         painter.translate(0, y_offset)
         
