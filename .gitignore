@@ -19,3 +19,5 @@ final_*.png
 Thumbs.db
 .vscode/
 .idea/
+
+build

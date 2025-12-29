@@ -156,7 +156,7 @@
     ],
     "output_suffix": "{postgrad}_{nome}",
     "imposition_settings": {
-        "enabled": true,
+        "enabled": false,
         "target_w_mm": 130.0,
         "target_h_mm": 92.2,
         "print_after_generation": false
