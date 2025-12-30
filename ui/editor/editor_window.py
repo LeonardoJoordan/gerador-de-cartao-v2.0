@@ -21,7 +21,7 @@ class EditorWindow(QMainWindow):
     modelSaved = Signal(str, list)
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Editor Visual de Modelo (AutoMakeCard)")
+        self.setWindowTitle("Editor Visual de Modelo (Gerador de Cartões em Lote - GCL)")
         self.resize(1200, 800)
 
         # Configuração da UI Principal
@@ -602,7 +602,7 @@ class EditorWindow(QMainWindow):
         # 1. Define o nome do arquivo/pasta (slug)
         from core.template_v2 import slugify_model_name
         model_name = self.windowTitle().replace("Editor Visual de Modelo - ", "")
-        if not model_name or "AutoMakeCard" in model_name:
+        if not model_name or "Gerador de Cartões em Lote - GCL" in model_name:
             model_name, ok = QInputDialog.getText(self, "Salvar Modelo", "Nome do Modelo:")
             if not ok or not model_name: return
             self.setWindowTitle(f"Editor Visual de Modelo - {model_name}")

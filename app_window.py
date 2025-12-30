@@ -23,7 +23,7 @@ from ui.naming_dialog import NamingDialog
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gerador de Cartão em Lote v3.0")
+        self.setWindowTitle("Gerador de Cartões em Lote - GCL")
         self.resize(1300, 750)
 
         central = QWidget()
@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
         self.controls_panel.btn_rename_model.clicked.connect(self._on_rename_model) # [NOVO]
         self.controls_panel.btn_config_model.clicked.connect(self._open_model_dialog)
 
-        self.settings = QSettings("AutoMakeCard", "MainApp")
+        self.settings = QSettings("Gerador de Cartões em Lote - GCL", "MainApp")
         last_output = self.settings.value("last_output_dir", "")
         if last_output:
             self.txt_output_path.setText(str(last_output))
