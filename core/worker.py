@@ -1,11 +1,68 @@
 # core/worker.py
-from PySide6.QtCore import QThread, Signal, QObject
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QThread, Signal, QObject, QSizeF
+from PySide6.QtGui import QImage, QPainter, QPageLayout
+from PySide6.QtPrintSupport import QPrinter
 from pathlib import Path
 import os
 import math
 from core.naming import build_output_filename
 from core.sheet_assembler import SheetAssembler
+
+def save_image_as_format(image: QImage, path: Path, fmt: str):
+    """
+    Salva a imagem no disco.
+    Se fmt="PDF", cria um PDF com a página do tamanho exato da imagem.
+    Se fmt="PNG", salva direto.
+    """
+    if fmt == "PDF":
+        # Troca a extensão para .pdf
+        pdf_path = path.with_suffix(".pdf")
+        
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(str(pdf_path))
+        
+        # Define o tamanho da página do PDF igual ao tamanho da imagem (em pixels)
+        # Convertendo pixels de volta para unidades de página se necessário, 
+        # mas QPageSize.Unit.Pixels costuma funcionar bem no Qt6.
+        # No entanto, para garantir compatibilidade simples, vamos definir o tamanho
+        # personalizado da página em milímetros ou pontos baseados na imagem.
+        
+        # Truque: Usar Custom Page Size no Printer para bater com a imagem
+        img_size = image.size()
+        # printer.setPageSize(QPageSize(QSizeF(img_size.width(), img_size.height()), QPageSize.Unit.Pixels)) # Qt6.0+
+        
+        # Abordagem compatível e robusta:
+        # Configurar papel para Full Page e desenhar
+        printer.setFullPage(True)
+        
+        # Ajusta orientação
+        if img_size.width() > img_size.height():
+            printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+        else:
+            printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+
+        painter = QPainter()
+        if painter.begin(printer):
+            # Desenha a imagem ocupando todo o rect do papel (que ajustamos/assumimos A4 ou custom)
+            # Para imposição (A4), o padrão A4 do printer serve.
+            # Para cartões soltos, seria ideal ajustar o tamanho do papel, 
+            # mas por simplicidade mantemos A4 ou o padrão do sistema por enquanto.
+            # (Melhoria futura: setar PaperSize customizado)
+            
+            rect = painter.viewport()
+            # Desenha centralizado ou esticado?
+            # Como é "Raster PDF", queremos 1:1. 
+            # O SheetAssembler já gera A4 a 300DPI. O Printer HighRes espera isso.
+            painter.drawImage(rect, image)
+            painter.end()
+            
+        return str(pdf_path.name)
+    else:
+        # Padrão PNG
+        final_path = path.with_suffix(".png")
+        image.save(str(final_path))
+        return str(final_path.name)
 
 class PageRenderWorker(QThread):
     """
@@ -22,11 +79,12 @@ class PageRenderWorker(QThread):
     page_finished = Signal(int, str, str) 
     error_occurred = Signal(str)
 
-    def __init__(self, tasks, renderer, output_dir, imposition_settings):
+    def __init__(self, tasks, renderer, output_dir, imposition_settings, output_format="PNG"):
         super().__init__()
         self.tasks = tasks # Lista de pacotes de página
         self.renderer = renderer
         self.output_dir = output_dir
+        self.output_format = output_format
         
         # Cada worker tem seu próprio montador para segurança total de thread
         w_mm = imposition_settings.get("target_w_mm", 100)
@@ -67,13 +125,14 @@ class PageRenderWorker(QThread):
                 # Para manter consistência com o Manager, o nome do arquivo foi passado na task?
                 # Vamos ajustar o Manager para mandar o nome da folha.
                 out_name = page_task["output_filename"]
-                out_path = self.output_dir / out_name
+                base_path = self.output_dir / out_name
                 
-                sheet_img.save(str(out_path))
+                # [NOVO] Usa a função auxiliar
+                saved_name = save_image_as_format(sheet_img, base_path, self.output_format)
                 
                 # 4. Reporta sucesso
-                msg = f"🖨️  FOLHA {page_num:02d} OK ({len(card_images)} itens)"
-                self.page_finished.emit(len(card_images), out_name, msg)
+                msg = f"🖨️  FOLHA {page_num:02d} OK ({len(card_images)} itens) -> {saved_name}"
+                self.page_finished.emit(len(card_images), saved_name, msg)
                 
                 # Limpa memória explicitamente (embora Python faça garbage collection)
                 card_images.clear()
@@ -92,11 +151,12 @@ class DirectRenderWorker(QThread):
     card_finished = Signal(str)
     error_occurred = Signal(str)
 
-    def __init__(self, chunk_data, renderer, output_dir):
+    def __init__(self, chunk_data, renderer, output_dir, output_format="PNG"):
         super().__init__()
         self.chunk_data = chunk_data # Lista de (row_plain, row_rich, filename)
         self.renderer = renderer
         self.output_dir = output_dir
+        self.output_format = output_format
         self._is_running = True
 
     def stop(self):
@@ -107,9 +167,14 @@ class DirectRenderWorker(QThread):
             for (row_plain, row_rich, filename) in self.chunk_data:
                 if not self._is_running: break
                 
-                out_path = self.output_dir / f"{filename}.png"
-                self.renderer.render_row(row_plain, row_rich, out_path)
-                self.card_finished.emit(f"{filename}.png")
+                # Renderiza em memória primeiro para poder decidir como salvar
+                # (RenderManager direto para disco usava render_row, aqui vamos usar render_to_qimage)
+                img = self.renderer.render_to_qimage(row_plain, row_rich)
+                
+                base_path = self.output_dir / filename
+                saved_name = save_image_as_format(img, base_path, self.output_format)
+                
+                self.card_finished.emit(saved_name)
         except Exception as e:
             self.error_occurred.emit(str(e))
 
@@ -124,13 +189,14 @@ class RenderManager(QObject):
     finished_process = Signal()
     error_occurred = Signal(str)
 
-    def __init__(self, renderer, rows_plain, rows_rich, output_dir, filename_pattern, imposition_settings=None):
+    def __init__(self, renderer, rows_plain, rows_rich, output_dir, filename_pattern, imposition_settings=None, output_format="PNG"):
         super().__init__()
         self.renderer = renderer
         self.rows_plain = rows_plain
         self.rows_rich = rows_rich
         self.output_dir = output_dir
         self.pattern = filename_pattern
+        self.output_format = output_format
         
         self.imposition_settings = imposition_settings or {"enabled": False}
         self.is_imposition = self.imposition_settings.get("enabled", False)
@@ -208,7 +274,7 @@ class RenderManager(QObject):
             
             if not worker_tasks: continue
             
-            w = PageRenderWorker(worker_tasks, self.renderer, self.output_dir, self.imposition_settings)
+            w = PageRenderWorker(worker_tasks, self.renderer, self.output_dir, self.imposition_settings, self.output_format)
             w.page_finished.connect(self._on_page_finished)
             w.error_occurred.connect(self.error_occurred)
             w.finished.connect(self._check_all_finished)
@@ -228,7 +294,7 @@ class RenderManager(QObject):
             
             if not chunk: continue
             
-            w = DirectRenderWorker(chunk, self.renderer, self.output_dir)
+            w = DirectRenderWorker(chunk, self.renderer, self.output_dir, self.output_format)
             w.card_finished.connect(self._on_direct_card_finished)
             w.error_occurred.connect(self.error_occurred)
             w.finished.connect(self._check_all_finished)

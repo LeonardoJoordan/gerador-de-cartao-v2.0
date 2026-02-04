@@ -6,7 +6,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                 QSplitter, QPushButton, QApplication, QMessageBox,
                                   QLineEdit, QLabel, QFileDialog, QProgressBar,
-                                  QInputDialog) # <--- Certifique-se que QInputDialog está aqui
+                                  QInputDialog, QComboBox) # <--- Certifique-se que QInputDialog está aqui
 from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QPainter, QImage, QPageLayout
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
@@ -91,6 +91,13 @@ class MainWindow(QMainWindow):
         self.btn_sel_out.setToolTip("Selecionar pasta de destino")
         self.btn_sel_out.clicked.connect(self._select_output_folder)
         ly_out.addWidget(self.btn_sel_out)
+
+        # Seletor de Formato
+        self.cbo_output_format = QComboBox()
+        self.cbo_output_format.addItems(["PNG", "PDF"])
+        self.cbo_output_format.setFixedWidth(60)
+        self.cbo_output_format.setToolTip("Formato de saída")
+        ly_out.addWidget(self.cbo_output_format)
 
         self.btn_config_name = QPushButton("⚙️")
         self.btn_config_name.setFixedWidth(40)
@@ -353,6 +360,9 @@ class MainWindow(QMainWindow):
 
         # Recupera config de imposição (se existir)
         imposition_cfg = self.cached_model_data.get("imposition_settings", None)
+        
+        # [NOVO] Captura o formato selecionado
+        fmt = self.cbo_output_format.currentText()
 
         self.manager = RenderManager(
             renderer, 
@@ -360,7 +370,8 @@ class MainWindow(QMainWindow):
             rows_rich, 
             output_dir, 
             full_pattern,
-            imposition_settings=imposition_cfg
+            imposition_settings=imposition_cfg,
+            output_format=fmt
         )
         
         self.manager.progress_updated.connect(self.progress_bar.setValue)
